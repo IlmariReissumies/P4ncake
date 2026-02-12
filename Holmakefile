@@ -1,0 +1,2 @@
+INCLUDES = $(HOL4P4DIR)/hol \
+           $(CAKEMLDIR)/semantics \
