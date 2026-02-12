@@ -1,0 +1,22 @@
+# HOL stuff
+*Script
+*Theory.sig
+*Theory.sml
+*Theory.dat
+*.uo
+*.ui
+*.o
+.hol
+.HOLMK
+.hollogs
+
+# HOLHEAP
+*heap
+
+# Emacs backup files
+*~
+
+# Vim swap files
+*.swp
+
+.DS_Store
