@@ -6,7 +6,7 @@ Theory compiler
 Ancestors
   panLang
   p4
-
+  finite_map
           
 val _ = monadsyntax.temp_add_monadsyntax()
 val _ = monadsyntax.enable_monad "option"
@@ -46,14 +46,16 @@ End
 *)
                    
 (*--AUXILIARY--*)            
-Datatype:
-  enviroment = <| scope : scope |>       (* Will include more fields when needed *)
-End
+Type scope_dict  = “:varname |-> varkind”
+Type state_dict = “:varname |-> ('a prog list)”
+Type scope_kv   = “:finitemap # varkind”
+Type state_kv   = “:varname # ('a state_dict)”
 
-(* Scope--for mapping variables/functions to a varkind, i.e. global or local *)
-Type scopekv = “:string # varkind”
-Type scope = “:string”                   (* Should be a 'map/dictionary' : varname -> varkind *)
-val env = “<| scope := "temp" |>”        (* Populate as needed *)
+Datatype:
+  env_rec = <| scopes : 'a ; states : 'b|>
+End
+                  
+
  
 Definition lval_to_mlstring_def:
   lval_to_mlstring (lval_varname varname)   = strlit "TEMP-VARNAME" ∧
@@ -95,7 +97,7 @@ Definition compile_binop_def:
   | binop_xor     => Op Xor       [pan_e1;  pan_e2]
   | binop_bin_and => Op And       [pan_e1;  pan_e2]
   | binop_bin_or  => Op Or        [pan_e1;  pan_e2]
-  | _ => ARB                                          (* ERROR, invalid, should not happen *)
+  | _ => NONE                                          (* ERROR, invalid, should not happen *)
 End
 
 (*
@@ -151,7 +153,7 @@ Definition compile_exp_def:
   compile_exp (e_cast cast e)     = NONE ∧
   compile_exp (e_struct fields)   = NONE ∧
   compile_exp (e_header b fields) = NONE ∧             (*fields are (string#exp). Similar to a struct*)
-  compile_exp (e_select e ss s)   = NONE ∧             (**)
+  compile_exp (e_select e ss s)   = NONE ∧             (*switch*)
   compile_exp (e_slice e1 e2 e3)  = NONE ∧             (*bit-slice*)
   compile_exp (e_concat e1 e2)    = NONE ∧             (*bit_strings*)
   compile_exp _ = NONE                                 (* ERROR, invalid, should not happen *)
@@ -184,12 +186,45 @@ Definition compile_stmt_def:
     p2' <- compile_stmt stmt2;
     return $ Seq p1' p2'
   od ∧
-  compile_stmt (stmt_trans e)              = NONE ∧
+  compile_stmt (stmt_trans e)              = NONE ∧       (* I reduces to parser state name "st" *)
   compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
   compile_stmt (stmt_ext)                  = NONE ∧
-  compile_stmt _ = ARB                                   (* ERROR, invalid, should not happen *)
+  compile_stmt _ = NONE                                   (* ERROR, invalid, should not happen *)
 End
 
+Definition compile_parser_def:
+  compile_parser env = NONE
+End
+
+Definition compile_control_def:
+  compile_control env = NONE
+End
+
+Definition compile_pblock_def:
+  compile_pblock env (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) =
+    case pbl_type of
+      pbl_type_parser => return $ compile_parser env
+    | pbl_type_control => return $ compile_control env
+End
+
+Definition compile_pblocks_def:
+  compile_pblocks env [] = return $ env ∧
+  compile_pblocks env (pblock::pblocks) =
+  do
+    env' <- compile_pblock env pblock;
+    env'' <- compile_pblocks env' pblocks;
+    return $ env''
+  od
+End
+
+(*---PRE-PASS & SETUP---*)
+(* Records the state blocks' code into a (prog list) so that the
+ states blocks can be collapsed.  Also, renames any variables that
+ shadow previous variables. *)
+Definition states_pass_def:
+  states_pass_def = NONE
+End
+        
 (*
 Definition pre_pass_def:
   pre_pass_def env =
@@ -201,7 +236,16 @@ Definition pre_pass_def:
 End
 *)
 
-(*Entry*)(*
+Definition env_setup_def:
+  env_setup =
+    let dict1 = FEMPTY : scope_dict in
+      let dict2 = FEMPTY : word64 state_dict in
+        let env = <| scopes := dict1 ; states := dict2  |> in
+          return env
+End
+
+(*---ENTRY---*)
+(*
 Definition compile_def:
   compile_def =
   do
