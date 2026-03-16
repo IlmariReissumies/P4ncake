@@ -1,25 +1,16 @@
+(*
+P4 to Pancake transpiler, "P4ncake".  It assumes well-typed P4 programs.
+*)
+
 Theory compiler
 Ancestors
-  panLang p4
+  panLang
+  p4
 
           
 val _ = monadsyntax.temp_add_monadsyntax()
 val _ = monadsyntax.enable_monad "option"
-
-                                                       
-(*
-Definition test:
-  foo 0 = SOME [] ∧
-  foo (SUC x) =
-    if x = 0:num then NONE
-    else do
-      ys <- foo x;
-      return(T::ys)
-      od
-End                  
-*)
-                   
-(*--AUXILIARY--*)
+                  
 (*
 ---TODO:---
 fun lookup_var
@@ -27,6 +18,7 @@ fun lookup_call_type
 fun lookup_field_index
 fun morph_calls
 -----------
+---EXAMPLES:---
 Type yoooooo = “:'a # string”
 
 val test = “(17,"hello") : num yoooooo”
@@ -38,26 +30,31 @@ End
 Type foo = “:num yoooooo myrec”
 
 val test2 = “<| field1 := (17,"hello"); field2 := 12156 |> : foo”
-*)
 
-Type word64b = “:64 word”
-val ones = “unit bit1 bit1 bit1 bit1 bit1 bit1 word : word64b”
-val p_exp_ones = “Const ones”
-                   
 Type mlstringpair = “:string # mlstring”;
 
+Definition test:
+  foo 0 = SOME [] ∧
+  foo (SUC x) =
+    if x = 0:num then NONE
+    else do
+      ys <- foo x;
+      return(T::ys)
+      od
+End 
+---------------
+*)
+                   
+(*--AUXILIARY--*)            
 Datatype:
-  env = <| signatures : string;
-             varnames : mlstringpair |>
+  enviroment = <| scope : scope |>       (* Will include more fields when needed *)
 End
 
-val test = “<| signatures := "Hi"; varnames := ("oh", strlit "ah") |>” 
-                   
-(*
-Dictionary of either {varn, varname} : {varn, mlstring} or
-                     {string, varname} : {string, mlstring}
-*)
-
+(* Scope--for mapping variables/functions to a varkind, i.e. global or local *)
+Type scopekv = “:string # varkind”
+Type scope = “:string”                   (* Should be a 'map/dictionary' : varname -> varkind *)
+val env = “<| scope := "temp" |>”        (* Populate as needed *)
+ 
 Definition lval_to_mlstring_def:
   lval_to_mlstring (lval_varname varname)   = strlit "TEMP-VARNAME" ∧
   lval_to_mlstring (lval_null)              = strlit "TEMP-NULL--to_mlstring not finished"  ∧
@@ -72,6 +69,11 @@ Definition varn_to_mlstring_def:
 End
   
 (*--COMPILATION--*)
+(*
+Assumes that Pancake deals with overflowing values (for the saturated ADD and SUB).
+        
+Paramethers: op : unop in P4, pan_eX is a (compiled P4) Pancake expression
+*)
 Definition compile_binop_def:
   compile_binop (pan_e1, op, pan_e2) = case op of
     binop_le      => Cmp Lower    (pan_e1) (pan_e2)
@@ -85,27 +87,50 @@ Definition compile_binop_def:
   | binop_div     => ARB          [pan_e1;  pan_e2]
   | binop_mod     => ARB          [pan_e1;  pan_e2]
   | binop_add     => Op Add       [pan_e1;  pan_e2]
-  | binop_sat_add => ARB          [pan_e1;  pan_e2]
+  | binop_sat_add => Op Add       [pan_e1;  pan_e2]
   | binop_sub     => Op Sub       [pan_e1;  pan_e2]
-  | binop_sat_sub => ARB          [pan_e1;  pan_e2]
+  | binop_sat_sub => Op Sub       [pan_e1;  pan_e2]
   | binop_and     => Op And       [pan_e1;  pan_e2]
   | binop_or      => Op Or        [pan_e1;  pan_e2]
   | binop_xor     => Op Xor       [pan_e1;  pan_e2]
-  | binop_bin_and => ARB          [pan_e1;  pan_e2]
-  | binop_bin_or  => ARB          [pan_e1;  pan_e2]
-  | _ => ARB                   (* ERROR, invalid, should not happen *)
+  | binop_bin_and => Op And       [pan_e1;  pan_e2]
+  | binop_bin_or  => Op Or        [pan_e1;  pan_e2]
+  | _ => ARB                                          (* ERROR, invalid, should not happen *)
 End
 
+(*
+Since the transpiler only considers well-typed programs, this defintion only considers the cases of
+those.  Thus, cases if which the expressions don't conform to the correct units/values/types are ignored
+and could create silent errors.
+
+The following P4 exp. are the unitary operators (in order):
+   - boolean negation
+   - binary compliment
+   - signed negation
+   - unary plus (NO-OP)
+
+Paramethers: op : unop in P4, pan_e is a (compiled P4) Pancake expression
+*)
 Definition compile_unop_def:
   compile_unop (op, pan_e) = case op of
-    unop_neg        => ARB
-  | unop_compl      => ARB
-  | unop_neg_signed => ARB
-  | unop_un_plus    => ARB
-  | _ => ARB                   (* ERROR, invalid, should not happen *)
+    unop_neg        =>
+      let one    = 0x0000000000000001w : word64 in
+        let one_e  = Const one in
+          Op Xor [pan_e; one_e]
+  | unop_compl      =>
+      let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
+        let ones_e = Const ones in
+          Op Xor [pan_e; ones_e]
+  | unop_neg_signed =>
+      let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
+        let ones_e = Const ones in
+          Op Add [Op Xor [pan_e; ones_e]; ones_e]                      
+  | unop_un_plus    =>
+      let zero   = 0x0000000000000000w : word64 in
+        let zero_e = Const zero in
+          Op Add [pan_e; zero_e]
 End
 
-(*TODO: needs redoing with monad*)
 Definition compile_exp_def:
   compile_exp (e_binop e1 op e2)  =
   do
@@ -113,7 +138,11 @@ Definition compile_exp_def:
     e2' <- compile_exp e2;
     return $ compile_binop (e1', op, e2')
   od ∧       
-  compile_exp (e_unop op e)       = compile_unop (op, compile_exp e) ∧
+  compile_exp (e_unop op e)       =
+  do
+    e' <- compile_exp e;
+    return $ compile_unop (op, e')
+  od ∧
   compile_exp (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
   compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
   compile_exp (e_var varn)        = NONE ∧             (*need check with table*)
@@ -121,21 +150,20 @@ Definition compile_exp_def:
   compile_exp (e_acc e field)     = NONE ∧             (*need a helper function "field name to index"*)
   compile_exp (e_cast cast e)     = NONE ∧
   compile_exp (e_struct fields)   = NONE ∧
-  compile_exp (e_header b fields) = NONE ∧
-  compile_exp (e_select e ss x)   = NONE ∧
+  compile_exp (e_header b fields) = NONE ∧             (*fields are (string#exp). Similar to a struct*)
+  compile_exp (e_select e ss s)   = NONE ∧             (**)
   compile_exp (e_slice e1 e2 e3)  = NONE ∧             (*bit-slice*)
   compile_exp (e_concat e1 e2)    = NONE ∧             (*bit_strings*)
-  compile_exp _ = NONE          (* ERROR, invalid, should not happen *)
+  compile_exp _ = NONE                                 (* ERROR, invalid, should not happen *)
 End
 
-(*TODO: throwing of errors*)
 Definition compile_stmt_def:
   compile_stmt (stmt_empty)                = NONE ∧
   compile_stmt (stmt_ass l_val e)          =
   do
     e' <- compile_exp e;
     (* get global/local from varname *)
-    return $ Assign Global (lval_to_mlstring l_val) (e') 
+    return $ Assign Global (lval_to_mlstring l_val) (e')  (*Are there local functions*)
   od ∧
   compile_stmt (stmt_cond e stmt_t stmt_f) =
   do
@@ -144,7 +172,7 @@ Definition compile_stmt_def:
     pf' <- compile_stmt stmt_f;
     return $ If e' pt' pf'
   od ∧
-  compile_stmt (stmt_block t_scope stmt)   = ARB ∧
+  compile_stmt (stmt_block t_scope stmt)   = NONE ∧    
   compile_stmt (stmt_ret e)                =
   do
     e' <- (compile_exp e);
@@ -156,17 +184,19 @@ Definition compile_stmt_def:
     p2' <- compile_stmt stmt2;
     return $ Seq p1' p2'
   od ∧
-  compile_stmt (stmt_trans e)              = ARB ∧
-  compile_stmt (stmt_app x es)             = ARB ∧            (* Method call *)
-  compile_stmt (stmt_ext)                  = ARB ∧
-  compile_stmt _ = ARB         (* ERROR, invalid, should not happen *)
+  compile_stmt (stmt_trans e)              = NONE ∧
+  compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
+  compile_stmt (stmt_ext)                  = NONE ∧
+  compile_stmt _ = ARB                                   (* ERROR, invalid, should not happen *)
 End
 
 (*
 Definition pre_pass_def:
-  pre_pass_def =
+  pre_pass_def env =
   do
-    
+    env' <- make_decls env
+    env'' <- scopes_prepass env'
+    env''' <- field_to_indices env''
   od
 End
 *)
@@ -175,18 +205,20 @@ End
 Definition compile_def:
   compile_def =
   do
-    env = pre_pass    
-    pancake_program = compile_prog  
-    some_pancake_function pancake_program
+    env  <- env_setup
+    env' <- pre_pass env   
+    (_, pancake_program) <- compile_prog env'
+    case pancake_program of
+      NONE => "Throw some error"
+    | SOME $ some_pancake_function pancake_program
   od
 End
 *)
 
 (* Prepass needs:
-   - Type of functions (tail, etc..)       table
-   - Variables and their varkind           table
-   - Structs to store fieldnames indecies  table
-   - Global vars/funs                      table
-   - Store calls in P4 to change to stmts     -- are there more complicaded calls in P4 than Pancake
+   - Type of function call                 
+   - Structs to store fieldnames indecies  
+   - Store calls in P4 to change to stmts  
    - Direction translations
+   - Actionmap (struct)
 *)
