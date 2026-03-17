@@ -48,7 +48,7 @@ End
 (*--AUXILIARY--*)            
 Type scope_dict  = “:varname |-> varkind”
 Type state_dict = “:varname |-> ('a prog list)”
-Type scope_kv   = “:finitemap # varkind”
+(*Type scope_kv   = “:finitemap # varkind”*)
 Type state_kv   = “:varname # ('a state_dict)”
 
 Datatype:
@@ -97,7 +97,7 @@ Definition compile_binop_def:
   | binop_xor     => Op Xor       [pan_e1;  pan_e2]
   | binop_bin_and => Op And       [pan_e1;  pan_e2]
   | binop_bin_or  => Op Or        [pan_e1;  pan_e2]
-  | _ => NONE                                          (* ERROR, invalid, should not happen *)
+  | _ => ARB                                          (* ERROR, invalid, should not happen *)
 End
 
 (*
