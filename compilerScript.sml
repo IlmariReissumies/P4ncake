@@ -46,13 +46,11 @@ End
 *)
                    
 (*--AUXILIARY--*)            
-Type scope_dict  = “:varname |-> varkind”
-Type state_dict = “:varname |-> ('a prog list)”
-Type scope_kv   = “:finitemap # varkind”
-Type state_kv   = “:varname # ('a state_dict)”
+Type state_dict = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
+Type scope_dict = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 
 Datatype:
-  env_rec = <| scopes : 'a ; states : 'b|>
+  env_rec = <| states : 'a ; scopes : 'b |>
 End
                   
 
@@ -69,7 +67,16 @@ Definition varn_to_mlstring_def:
   varn_to_mlstring_def (varn_name s)    = strlit "TEMP-VARNAME" ∧
   varn_to_mlstring_def (varn_star funn) = strlit "TEMP-FUNNAME"
 End
-  
+
+(* TODO *)
+Definition v_to_word:
+  v_to_word v = case v of
+    v_bool b     => NONE 
+  | v_bit (s,n)  => NONE
+  | v_str s      => NONE
+
+End
+         
 (*--COMPILATION--*)
 (*
 Assumes that Pancake deals with overflowing values (for the saturated ADD and SUB).
@@ -97,7 +104,6 @@ Definition compile_binop_def:
   | binop_xor     => Op Xor       [pan_e1;  pan_e2]
   | binop_bin_and => Op And       [pan_e1;  pan_e2]
   | binop_bin_or  => Op Or        [pan_e1;  pan_e2]
-  | _ => NONE                                          (* ERROR, invalid, should not happen *)
 End
 
 (*
@@ -148,7 +154,19 @@ Definition compile_exp_def:
   compile_exp (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
   compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
   compile_exp (e_var varn)        = NONE ∧             (*need check with table*)
-  compile_exp (e_v val)           = NONE ∧             (*what can val be*)
+  compile_exp (e_v val)           = (case val of
+    v_bool b        =>
+      do
+        let zeros = 0x0000000000000000w : word64 in    (* TODO *)
+          let ones_e = make_word_from_bin_list zeroes
+            return $ Const $ 
+      od
+  | v_bit bit       => return $ Const $ (v_to_word val)
+  | v_str s         => return $ Const $ (v_to_word val)
+  | v_struct svs    => NONE
+  | v_header hd svs => NONE
+  | v_ext_ref i     => NONE
+  | v_bot           => NONE ) ∧
   compile_exp (e_acc e field)     = NONE ∧             (*need a helper function "field name to index"*)
   compile_exp (e_cast cast e)     = NONE ∧
   compile_exp (e_struct fields)   = NONE ∧
@@ -192,19 +210,22 @@ Definition compile_stmt_def:
   compile_stmt _ = NONE                                   (* ERROR, invalid, should not happen *)
 End
 
+(* TODO *)
 Definition compile_parser_def:
-  compile_parser env = NONE
+  compile_parser env pars_map = NONE
 End
 
+(* TODO *)
 Definition compile_control_def:
-  compile_control env = NONE
+  compile_control env tbl_map = NONE
 End
 
+(* TODO *)
 Definition compile_pblock_def:
   compile_pblock env (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) =
     case pbl_type of
-      pbl_type_parser => return $ compile_parser env
-    | pbl_type_control => return $ compile_control env
+      pbl_type_parser => return $ compile_parser env pars_map
+    | pbl_type_control => return $ compile_control env tbl_map
 End
 
 Definition compile_pblocks_def:
@@ -213,16 +234,31 @@ Definition compile_pblocks_def:
   do
     env' <- compile_pblock env pblock;
     env'' <- compile_pblocks env' pblocks;
-    return $ env''
+    return env''
   od
 End
 
+(* TODO *)
+Definition compile_archblocks_def:
+  compile_archblocks env [] = return $ env ∧
+  compile_archblocks env (ablock::ablocks) = case ablock of
+    arch_block_inp => NONE
+  | arch_block_pbl s exps => NONE
+  | arch_block_ffbl s => NONE
+  | arch_block_out => NONE
+End
+
 (*---PRE-PASS & SETUP---*)
-(* Records the state blocks' code into a (prog list) so that the
- states blocks can be collapsed.  Also, renames any variables that
- shadow previous variables. *)
+(* Records the state blocks' code into a (prog list maybe) so that the
+ states blocks can become a state-machine in Pancake (if-else-blocks) *)
 Definition states_pass_def:
-  states_pass_def = NONE
+  states_pass_def env pars_map = NONE
+(*
+  do      
+    body <- pars_map "start"
+    env <- record_states body
+  od   
+*)
 End
         
 (*
@@ -238,9 +274,9 @@ End
 
 Definition env_setup_def:
   env_setup =
-    let dict1 = FEMPTY : scope_dict in
-      let dict2 = FEMPTY : word64 state_dict in
-        let env = <| scopes := dict1 ; states := dict2  |> in
+    let dict1 = FEMPTY : word64 state_dict in
+      let dict2 = FEMPTY : scope_dict in
+        let env = <| states := dict1 ; scopes := dict2 |> in
           return env
 End
 
