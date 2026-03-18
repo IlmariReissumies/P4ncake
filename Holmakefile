@@ -1,2 +1,3 @@
 INCLUDES = $(HOL4P4DIR)/hol \
-           $(CAKEMLDIR)/pancake
+           $(CAKEMLDIR)/pancake\
+           $(CAKEMLDIR)/pancake/semantics

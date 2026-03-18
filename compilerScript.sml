@@ -45,7 +45,7 @@ End
 ---------------
 *)
                    
-(*--AUXILIARY--*)            
+(*--AUXILIARY--*)
 Type state_dict = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 
