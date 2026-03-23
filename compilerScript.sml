@@ -12,12 +12,6 @@ val _ = monadsyntax.temp_add_monadsyntax()
 val _ = monadsyntax.enable_monad "option"
                   
 (*
----TODO:---
-fun lookup_var
-fun lookup_call_type
-fun lookup_field_index
-fun morph_calls
------------
 ---EXAMPLES:---
 Type yoooooo = “:'a # string”
 
@@ -49,12 +43,11 @@ End
 Type state_dict = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 
+
 Datatype:
   env_rec = <| states : 'a ; scopes : 'b |>
 End
                   
-
- 
 Definition lval_to_mlstring_def:
   lval_to_mlstring (lval_varname varname)   = strlit "TEMP-VARNAME" ∧
   lval_to_mlstring (lval_null)              = strlit "TEMP-NULL--to_mlstring not finished"  ∧
@@ -68,15 +61,10 @@ Definition varn_to_mlstring_def:
   varn_to_mlstring_def (varn_star funn) = strlit "TEMP-FUNNAME"
 End
 
-(* TODO *)
-Definition v_to_word:
-  v_to_word v = case v of
-    v_bool b     => NONE 
-  | v_bit (s,n)  => NONE
-  | v_str s      => NONE
-
+Definition seq_def:
+  seq pr1 pr2 = Seq pr1 pr2
 End
-         
+
 (*--COMPILATION--*)
 (*
 Assumes that Pancake deals with overflowing values (for the saturated ADD and SUB).
@@ -121,10 +109,7 @@ Paramethers: op : unop in P4, pan_e is a (compiled P4) Pancake expression
 *)
 Definition compile_unop_def:
   compile_unop (op, pan_e) = case op of
-    unop_neg        =>
-      let one    = 0x0000000000000001w : word64 in
-        let one_e  = Const one in
-          Op Xor [pan_e; one_e]
+    unop_neg        => Op Xor [pan_e; Const(1w:word64)]
   | unop_compl      =>
       let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
         let ones_e = Const ones in
@@ -133,40 +118,33 @@ Definition compile_unop_def:
       let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
         let ones_e = Const ones in
           Op Add [Op Xor [pan_e; ones_e]; ones_e]                      
-  | unop_un_plus    =>
-      let zero   = 0x0000000000000000w : word64 in
-        let zero_e = Const zero in
-          Op Add [pan_e; zero_e]
+  | unop_un_plus    => Op Add [pan_e; Const(0w:word64)]
 End
-
+        
 Definition compile_exp_def:
   compile_exp (e_binop e1 op e2)  =
   do
     e1' <- compile_exp e1;
     e2' <- compile_exp e2;
     return $ compile_binop (e1', op, e2')
-  od ∧       
+  od                                     ∧       
   compile_exp (e_unop op e)       =
   do
     e' <- compile_exp e;
     return $ compile_unop (op, e')
-  od ∧
+  od                                     ∧
   compile_exp (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
   compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
   compile_exp (e_var varn)        = NONE ∧             (*need check with table*)
   compile_exp (e_v val)           = (case val of
-    v_bool b        =>
-      do
-        let zeros = 0x0000000000000000w : word64 in    (* TODO *)
-          let ones_e = make_word_from_bin_list zeroes
-            return $ Const $ 
-      od
-  | v_bit bit       => return $ Const $ (v_to_word val)
-  | v_str s         => return $ Const $ (v_to_word val)
+    v_bool true     => return $ Const(1w:word64)
+  | v_bool false    => return $ Const(0w:word64)
+  | v_bit bit       => NONE
+  | v_str s         => NONE
   | v_struct svs    => NONE
   | v_header hd svs => NONE
   | v_ext_ref i     => NONE
-  | v_bot           => NONE ) ∧
+  | v_bot           => NONE)             ∧
   compile_exp (e_acc e field)     = NONE ∧             (*need a helper function "field name to index"*)
   compile_exp (e_cast cast e)     = NONE ∧
   compile_exp (e_struct fields)   = NONE ∧
@@ -177,90 +155,137 @@ Definition compile_exp_def:
   compile_exp _ = NONE                                 (* ERROR, invalid, should not happen *)
 End
 
+(* TODO: make general function *)
+Definition compile_exps_def:
+  compile_exps [] = return [] ∧
+  compile_exps (e::es) =
+  do
+    pan_e  <- compile_exp e;
+    pan_es <- compile_exps es;
+    return $ pan_e::pan_es
+  od
+End
+
+(* TODO *)
 Definition compile_stmt_def:
   compile_stmt (stmt_empty)                = NONE ∧
   compile_stmt (stmt_ass l_val e)          =
   do
     e' <- compile_exp e;
     (* get global/local from varname *)
-    return $ Assign Global (lval_to_mlstring l_val) (e')  (*Are there local functions*)
-  od ∧
+    return $ Assign Global (lval_to_mlstring l_val) (e')
+  od                                              ∧
   compile_stmt (stmt_cond e stmt_t stmt_f) =
   do
     e'  <- compile_exp e;
     pt' <- compile_stmt stmt_t;
     pf' <- compile_stmt stmt_f;
     return $ If e' pt' pf'
-  od ∧
+  od                                              ∧
   compile_stmt (stmt_block t_scope stmt)   = NONE ∧    
   compile_stmt (stmt_ret e)                =
   do
     e' <- (compile_exp e);
     return $ Return e'
-  od ∧
+  od                                              ∧
   compile_stmt (stmt_seq stmt1 stmt2)      =
   do
     p1' <- compile_stmt stmt1;
     p2' <- compile_stmt stmt2;
     return $ Seq p1' p2'
-  od ∧
+  od                                              ∧
   compile_stmt (stmt_trans e)              = NONE ∧       (* I reduces to parser state name "st" *)
   compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
   compile_stmt (stmt_ext)                  = NONE ∧
   compile_stmt _ = NONE                                   (* ERROR, invalid, should not happen *)
 End
 
-(* TODO *)
+Definition compile_states_def:
+  compile_states pars_ms (* put all states stmts into conditional, e from 0w3-0wN *)
+End
+
+(* TODO: make pr_accept and pr_reject do more possible than just break *)
 Definition compile_parser_def:
-  compile_parser env pars_map = NONE
+  compile_parser env pars_ms =
+  let e_trans = Const (0w2:word64) in
+    let e_start = Const (0w2:word64) in
+      let e_accept = Const (0w1:word64)) in
+        let e_reject = Cosnt (0w0:word64) in
+          let v_trans = Var Local (strlit "trans")in
+            let e_cmp = Cmp (Equal :cmp) in
+              let pr_accept = Break in
+                let pr_break = Break in                            
+  do
+    pr_start <- ALOOKUP pars_ms "start";
+    pr_else <- (Seq (If e_cmp v_trans e_accept pr_accept Skip) (If e_cmp v_trans e_reject pr_reject (compile_states pars_ms));
+    pr_st_ma <- While (Const (0w1:word64)) (Seq (Dec (strlit "trans") One e_trans Skip) (If e_cmp v_trans e_start pr_start pr_else));
+  od
 End
 
 (* TODO *)
 Definition compile_control_def:
   compile_control env tbl_map = NONE
+ (* get prog back (a Seq prog prog likly *)
 End
 
 (* TODO *)
 Definition compile_pblock_def:
-  compile_pblock env (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) =
+  compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_ms, tbl_map) =
     case pbl_type of
-      pbl_type_parser => return $ compile_parser env pars_map
-    | pbl_type_control => return $ compile_control env tbl_map
+      pbl_type_parser => (case sd_list of (sdpairs) =>
+        do
+          (env', pr) <- compile_parser env pars_ms;
+          let p = MAP (\(l,r).l) (sdpairs) in                                                           
+            let p' = MAP (\x.(x, One)) p in
+             let decl =
+         <|   name        := strlit n
+            ; inline      := F
+            ; export      := F
+            ; params      := p'
+            ; body        := pr
+            ; return      := One
+         |> :word64 fun_decl in
+               return (env', decl)
+        od)
+    | pbl_type_control => NONE
 End
 
+(* Returns (:decl list) *)
 Definition compile_pblocks_def:
-  compile_pblocks env [] = return $ env ∧
-  compile_pblocks env (pblock::pblocks) =
-  do
-    env' <- compile_pblock env pblock;
-    env'' <- compile_pblocks env' pblocks;
-    return env''
-  od
+  compile_pblocks env [] = return (env, []) ∧
+  compile_pblocks env (pa::pas) = case pa of (n, pbl) =>
+   do
+     (env', decl)  <- compile_pblock env n pbl;
+     (env'', decls) <- compile_pblocks env' pas;
+     return $ (env'', (decl::decls))
+   od                   
 End
 
 (* TODO *)
 Definition compile_archblocks_def:
-  compile_archblocks env [] = return $ env ∧
-  compile_archblocks env (ablock::ablocks) = case ablock of
+  compile_archblocks env _ [] = return (env, []) ∧
+  compile_archblocks env pblock_ms (ablock::ablocks) = case ablock of
     arch_block_inp => NONE
-  | arch_block_pbl s exps => NONE
+  | arch_block_pbl _ _ =>
+      do
+        (env',decls) <- compile_pblocks env pblock_ms;   
+        return $ (env',decls)
+      od
   | arch_block_ffbl s => NONE
   | arch_block_out => NONE
 End
 
-(*---PRE-PASS & SETUP---*)
-(* Records the state blocks' code into a (prog list maybe) so that the
- states blocks can become a state-machine in Pancake (if-else-blocks) *)
-Definition states_pass_def:
-  states_pass_def env pars_map = NONE
-(*
-  do      
-    body <- pars_map "start"
-    env <- record_states body
-  od   
-*)
+(* (ab_list # pblock_map # 'a ffblock_map # 'a input_f # 'a output_f # 'a copyin_pbl # 'a copyout_pbl # 'a apply_table_f # 'a ext_map # func_map) *)
+Definition compile_actx_def:
+  compile_actx env (abs, ((_, pblock_ms) _), _, _, _, _, _, _, _, func_map) =
+  do
+    (env', decls) <- compile_archblocks env pblock_ms abs;
+    return (env', decls)
+  od
 End
-        
+
+(*---PRE-PASS & SETUP---*)
+      
 (*
 Definition pre_pass_def:
   pre_pass_def env =
@@ -276,29 +301,18 @@ Definition env_setup_def:
   env_setup =
     let dict1 = FEMPTY : word64 state_dict in
       let dict2 = FEMPTY : scope_dict in
-        let env = <| states := dict1 ; scopes := dict2 |> in
-          return env
+          let env = <| states := dict1 ; scopes := dict2 |> in
+            return env
 End
 
 (*---ENTRY---*)
-(*
 Definition compile_def:
   compile_def =
   do
-    env  <- env_setup
-    env' <- pre_pass env   
-    (_, pancake_program) <- compile_prog env'
+    let env = env_setup in
+    (_, pancake_program) <- compile_prog env;
     case pancake_program of
       NONE => "Throw some error"
-    | SOME $ some_pancake_function pancake_program
+    | SOME => NONE (*some_pancake_function pancake_program*)
   od
 End
-*)
-
-(* Prepass needs:
-   - Type of function call                 
-   - Structs to store fieldnames indecies  
-   - Store calls in P4 to change to stmts  
-   - Direction translations
-   - Actionmap (struct)
-*)

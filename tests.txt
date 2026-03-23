@@ -1,0 +1,40 @@
+____________________________________________
+-------------| HOL4P4 program1 |------------
+____________________________________________
+
+
+parse p(){
+  state start {
+      transition stop
+  }
+  state stop {
+      transition accept
+  }
+}
+
+               ______________
+***************| in Pancake |***************
+
+
+fun p() {
+  var transition = <<start>>;
+  while true {
+      if transition == <<start>> {
+          transition = <<stop>>;
+      }
+      if transision == <<stop>> {
+          transision = <<accept>>;
+      }
+      if transision == <<accept>> {
+          break;
+      }
+      if transision == <<reject>> {
+          break;
+      }
+  }
+}
+
+____________________________________________
+------------| HOL4P4 program2 |------------
+____________________________________________
+
