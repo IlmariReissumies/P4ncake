@@ -42,10 +42,11 @@ End
 (*--AUXILIARY--*)
 Type state_dict = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
+Type staten_dict = “:string |-> word64”         (* For state name translation to Pancake friendly comparable 'type' *)
 
 
 Datatype:
-  env_rec = <| states : 'a ; scopes : 'b |>
+  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c |>
 End
                   
 Definition lval_to_mlstring_def:
@@ -59,10 +60,6 @@ End
 Definition varn_to_mlstring_def:
   varn_to_mlstring_def (varn_name s)    = strlit "TEMP-VARNAME" ∧
   varn_to_mlstring_def (varn_star funn) = strlit "TEMP-FUNNAME"
-End
-
-Definition seq_def:
-  seq pr1 pr2 = Seq pr1 pr2
 End
 
 (*--COMPILATION--*)
@@ -110,14 +107,8 @@ Paramethers: op : unop in P4, pan_e is a (compiled P4) Pancake expression
 Definition compile_unop_def:
   compile_unop (op, pan_e) = case op of
     unop_neg        => Op Xor [pan_e; Const(1w:word64)]
-  | unop_compl      =>
-      let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
-        let ones_e = Const ones in
-          Op Xor [pan_e; ones_e]
-  | unop_neg_signed =>
-      let ones   = 0xFFFFFFFFFFFFFFFFw : word64 in
-        let ones_e = Const ones in
-          Op Add [Op Xor [pan_e; ones_e]; ones_e]                      
+  | unop_compl      => Op Xor [pan_e; Const(0xFFFFFFFFFFFFFFFFw:word64)]
+  | unop_neg_signed => Op Add [Op Xor [pan_e; Const(0xFFFFFFFFFFFFFFFFw:word64)]; Const(0xFFFFFFFFFFFFFFFFw:word64)]               
   | unop_un_plus    => Op Add [pan_e; Const(0w:word64)]
 End
         
@@ -128,7 +119,7 @@ Definition compile_exp_def:
     e2' <- compile_exp e2;
     return $ compile_binop (e1', op, e2')
   od                                     ∧       
-  compile_exp (e_unop op e)       =
+  compile_exp (e_unop op e)       =                     (* unop is only called on e=bool or bitv *)
   do
     e' <- compile_exp e;
     return $ compile_unop (op, e')
@@ -137,24 +128,27 @@ Definition compile_exp_def:
   compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
   compile_exp (e_var varn)        = NONE ∧             (*need check with table*)
   compile_exp (e_v val)           = (case val of
-    v_bool true     => return $ Const(1w:word64)
-  | v_bool false    => return $ Const(0w:word64)
-  | v_bit bit       => NONE
+    v_bool T     => return $ Const(1w:word64)
+  | v_bool F     => return $ Const(0w:word64)
+  | v_bit (bools,n) =>
+      let wrd_indx_list = ZIP ((MAP (\b.case b of T => 1w :word64 | F => 0w :word64) bools), (GENLIST (\m.m) n)) in
+        let wrd = FOLDR (\(m,i) c.word_xor (word_lsl m i) c) (0w :word64) wrd_indx_list in
+          return $ Const wrd
   | v_str s         => NONE
-  | v_struct svs    => NONE
+  | v_struct svs    => NONE                            (* put names into enviroment! *)
   | v_header hd svs => NONE
   | v_ext_ref i     => NONE
   | v_bot           => NONE)             ∧
-  compile_exp (e_acc e field)     = NONE ∧             (*need a helper function "field name to index"*)
+  compile_exp (e_acc e field)     = NONE ∧             
   compile_exp (e_cast cast e)     = NONE ∧
   compile_exp (e_struct fields)   = NONE ∧
   compile_exp (e_header b fields) = NONE ∧             (*fields are (string#exp). Similar to a struct*)
   compile_exp (e_select e ss s)   = NONE ∧             (*switch*)
   compile_exp (e_slice e1 e2 e3)  = NONE ∧             (*bit-slice*)
   compile_exp (e_concat e1 e2)    = NONE ∧             (*bit_strings*)
-  compile_exp _ = NONE                                 (* ERROR, invalid, should not happen *)
+  compile_exp _ = NONE
 End
-
+  
 (* TODO: make general function *)
 Definition compile_exps_def:
   compile_exps [] = return [] ∧
@@ -168,7 +162,7 @@ End
 
 (* TODO *)
 Definition compile_stmt_def:
-  compile_stmt (stmt_empty)                = NONE ∧
+  compile_stmt (stmt_empty)                = return Skip ∧
   compile_stmt (stmt_ass l_val e)          =
   do
     e' <- compile_exp e;
@@ -194,16 +188,20 @@ Definition compile_stmt_def:
     p2' <- compile_stmt stmt2;
     return $ Seq p1' p2'
   od                                              ∧
-  compile_stmt (stmt_trans e)              = NONE ∧       (* I reduces to parser state name "st" *)
+  compile_stmt (stmt_trans e)              = NONE ∧       (* make/lookup number for this e_varname *)
   compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
   compile_stmt (stmt_ext)                  = NONE ∧
   compile_stmt _ = NONE                                   (* ERROR, invalid, should not happen *)
 End
-
+(*
+(* what about numbers larger than 64bit *)
 Definition compile_states_def:
-  compile_states pars_ms (* put all states stmts into conditional, e from 0w3-0wN *)
+  compile_states (pm::pms) = case pm of (state, stmt) =>
+   env with state_nums := 
+                 
 End
-
+*)
+(*
 (* TODO: make pr_accept and pr_reject do more possible than just break *)
 Definition compile_parser_def:
   compile_parser env pars_ms =
@@ -211,13 +209,13 @@ Definition compile_parser_def:
     let e_start = Const (0w2:word64) in
       let e_accept = Const (0w1:word64)) in
         let e_reject = Cosnt (0w0:word64) in
-          let v_trans = Var Local (strlit "trans")in
+          let v_trans = Var Local (strlit "trans") in
             let e_cmp = Cmp (Equal :cmp) in
               let pr_accept = Break in
                 let pr_break = Break in                            
   do
     pr_start <- ALOOKUP pars_ms "start";
-    pr_else <- (Seq (If e_cmp v_trans e_accept pr_accept Skip) (If e_cmp v_trans e_reject pr_reject (compile_states pars_ms));
+    pr_else  <- (Seq (If e_cmp v_trans e_accept pr_accept Skip) (If e_cmp v_trans e_reject pr_reject (compile_states pars_ms));
     pr_st_ma <- While (Const (0w1:word64)) (Seq (Dec (strlit "trans") One e_trans Skip) (If e_cmp v_trans e_start pr_start pr_else));
   od
 End
@@ -301,7 +299,8 @@ Definition env_setup_def:
   env_setup =
     let dict1 = FEMPTY : word64 state_dict in
       let dict2 = FEMPTY : scope_dict in
-          let env = <| states := dict1 ; scopes := dict2 |> in
+        let dict3 = FEMPTY : staten_dict in
+          let env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 |> in
             return env
 End
 
@@ -316,3 +315,4 @@ Definition compile_def:
     | SOME => NONE (*some_pancake_function pancake_program*)
   od
 End
+*)

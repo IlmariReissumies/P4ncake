@@ -1,3 +1,4 @@
 INCLUDES = $(HOL4P4DIR)/hol \
            $(CAKEMLDIR)/pancake\
-           $(CAKEMLDIR)/pancake/semantics
+           $(CAKEMLDIR)/pancake/semantics \
+           $(HOL4P4DIR)/hol/symb_exec
