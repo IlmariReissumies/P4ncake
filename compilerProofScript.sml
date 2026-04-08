@@ -45,23 +45,43 @@ Theorem compile_exp_correct:
     bigstep_e_exec uninit (scope_lists:scope_list) (INR (es)) (n:num) = SOME $ (INR es', m) ∧
     EVERY is_v es' ∧ OPT_MMAP compile_exp es = SOME pan_es ∧ state_rel scope_lists s ⇒
     ∃ vs. OPT_MMAP (eval s) pan_es = SOME vs ∧
-         LIST_REL v_rel es' vs                  
+         LIST_REL v_rel es' vs                     
 Proof
   Induct
   >~ [‘e_v _’]
   >- (rw [compile_exp_def, bigstep_e_exec_def, AllCaseEqs()] >> rw [eval_def] >> metis_tac [v_rel_rules])
   >~ [‘e_unop _’]
-  >- rw [compile_unop_def, compile_exp_def, bigstep_e_exec_def, AllCaseEqs()]
-  >> (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> gvs[wordLangTheory.word_op_def] >> gvs[wordLangTheory.word_op_def])
-  >> (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> fs[bitv_unop_def] >> gvs[wordLangTheory.word_op_def])
-  >> (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> fs[bitv_unop_def, AllCaseEqs()] >> gvs[wordLangTheory.word_op_def] >> gvs[v_rel_cases])
-  >> (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> gvs[wordLangTheory.word_op_def])
-  >> (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> rw[eval_def] >> gvs[v_rel_cases] >> gvs[]
+  >- (rw [compile_unop_def, compile_exp_def, bigstep_e_exec_def, AllCaseEqs()]
+  >- (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> gvs[wordLangTheory.word_op_def] >> gvs[wordLangTheory.word_op_def])
+  >- (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> fs[bitv_unop_def] >> gvs[wordLangTheory.word_op_def])
+  >- (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> fs[bitv_unop_def, AllCaseEqs()] >> gvs[wordLangTheory.word_op_def] >> gvs[v_rel_cases])
+  >- (gvs[oneline e_exec_unop_def, AllCaseEqs(), oneline unop_exec_def] >> first_x_assum drule_all >> strip_tac >> rw[eval_def] >> gvs[v_rel_cases] >> gvs[wordLangTheory.word_op_def])
+  >- cheat
+  >- cheat
+  >- cheat
+  >- cheat)
   >~ [‘e_binop _’]
+  >- cheat
+  >~ [‘e_var _’]
+  >- cheat
+  >~ [‘e_acc _ _’]
+  >- cheat
+  >~ [‘e_cast _ _’]
+  >- cheat
+  >~ [‘e_concat _ _’]
+  >- cheat
+  >~ [‘e_slice _ _ _’]
+  >- cheat
+  >~ [‘e_call _ _’]
+  >- cheat
+  >~ [‘e_select _ _ _’]
+  >- cheat
+  >~ [‘e_struct _’]
+  >- cheat
+  >~ [‘e_header _ _’]
   >- cheat
   >~ [‘INR []’]
   >- (rw [bigstep_e_exec_def])
   >~ [‘INR (_::_)’]
-  >- cheat >>
-  gvs [compile_exp_def]
+  >- cheat >> gvs [compile_exp_def]
 QED

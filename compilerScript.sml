@@ -1,7 +1,3 @@
-(*
-P4 to Pancake transpiler, "P4ncake".  It assumes well-typed P4 programs.
-*)
-
 Theory compiler
 Ancestors
   panLang
@@ -10,45 +6,16 @@ Ancestors
           
 val _ = monadsyntax.temp_add_monadsyntax()
 val _ = monadsyntax.enable_monad "option"
-                  
-(*
----EXAMPLES:---
-Type yoooooo = “:'a # string”
-
-val test = “(17,"hello") : num yoooooo”
-
-Datatype:
-  myrec = <| field1 : 'a; field2 : num |>
-End
-
-Type foo = “:num yoooooo myrec”
-
-val test2 = “<| field1 := (17,"hello"); field2 := 12156 |> : foo”
-
-Type mlstringpair = “:string # mlstring”;
-
-Definition test:
-  foo 0 = SOME [] ∧
-  foo (SUC x) =
-    if x = 0:num then NONE
-    else do
-      ys <- foo x;
-      return(T::ys)
-      od
-End 
----------------
-*)
                    
 (*--AUXILIARY--*)
 Type state_dict = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 Type staten_dict = “:string |-> word64”         (* For state name translation to Pancake friendly comparable 'type' *)
 
-
 Datatype:
   env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c |>
 End
-                  
+
 Definition lval_to_mlstring_def:
   lval_to_mlstring (lval_varname varname)   = strlit "TEMP-VARNAME" ∧
   lval_to_mlstring (lval_null)              = strlit "TEMP-NULL--to_mlstring not finished"  ∧
@@ -126,7 +93,9 @@ Definition compile_exp_def:
   od                                     ∧
   compile_exp (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
   compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
-  compile_exp (e_var varn)        = NONE ∧             (*need check with table*)
+  compile_exp (e_var varn)        = (case varn of
+    varn_name n  => return $ Var Local (strlit n)
+  | varn_star fn => NONE)                   ∧            
   compile_exp (e_v val)           = (case val of
     v_bool T     => return $ Const(1w:word64)
   | v_bool F     => return $ Const(0w:word64)
@@ -149,7 +118,6 @@ Definition compile_exp_def:
   compile_exp _ = NONE
 End
   
-(* TODO: make general function *)
 Definition compile_exps_def:
   compile_exps [] = return [] ∧
   compile_exps (e::es) =
@@ -159,14 +127,17 @@ Definition compile_exps_def:
     return $ pan_e::pan_es
   od
 End
-
-(* TODO *)
+   
+(* TODO
+   - input enviroment/enviroment entvienment
+   - variables need env-table check for varkind value
+   - return should check stack return varaibels? (not needed since type-checked already?)
+*)
 Definition compile_stmt_def:
   compile_stmt (stmt_empty)                = return Skip ∧
   compile_stmt (stmt_ass l_val e)          =
   do
     e' <- compile_exp e;
-    (* get global/local from varname *)
     return $ Assign Global (lval_to_mlstring l_val) (e')
   od                                              ∧
   compile_stmt (stmt_cond e stmt_t stmt_f) =
@@ -191,62 +162,77 @@ Definition compile_stmt_def:
   compile_stmt (stmt_trans e)              = NONE ∧       (* make/lookup number for this e_varname *)
   compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
   compile_stmt (stmt_ext)                  = NONE ∧
-  compile_stmt _ = NONE                                   (* ERROR, invalid, should not happen *)
+  compile_stmt _ = NONE                  
 End
+
 (*
-(* what about numbers larger than 64bit *)
-Definition compile_states_def:
-  compile_states (pm::pms) = case pm of (state, stmt) =>
-   env with state_nums := 
-                 
+TODO:
+   - replace with actual function
+   
+Returns sequence of states.
+*)
+Definition compile_parser_states_def:
+  compile_parser_states (pm::pms) = return $ Assign Local (strlit "trans") (Const (1w:word64)) (* temporary hard-coded *)                 
 End
+
+
+(* TODO:
+   - make pr_accept and pr_reject do more possible than just break
+   - change term "Skip" in pr_if'' to the sequence of Ifs for rest of the possible states
+   - remove "compile_parser_states" and replace with function that return updated env (with all states, including "start") instead.
 *)
 (*
-(* TODO: make pr_accept and pr_reject do more possible than just break *)
+The Parser is a state machine and and is in Pancake translated into a function containing a conditional blocks for every state. Required states are the states: Start, Accept, and Reject. The function also contains function-global variables (e.g. from paramathers).
+*)
 Definition compile_parser_def:
   compile_parser env pars_ms =
-  let e_trans = Const (0w2:word64) in
-    let e_start = Const (0w2:word64) in
-      let e_accept = Const (0w1:word64)) in
-        let e_reject = Cosnt (0w0:word64) in
-          let v_trans = Var Local (strlit "trans") in
-            let e_cmp = Cmp (Equal :cmp) in
-              let pr_accept = Break in
-                let pr_break = Break in                            
-  do
-    pr_start <- ALOOKUP pars_ms "start";
-    pr_else  <- (Seq (If e_cmp v_trans e_accept pr_accept Skip) (If e_cmp v_trans e_reject pr_reject (compile_states pars_ms));
-    pr_st_ma <- While (Const (0w1:word64)) (Seq (Dec (strlit "trans") One e_trans Skip) (If e_cmp v_trans e_start pr_start pr_else));
-  od
+  (let
+     e_trans = Const (2w:word64);
+     e_start = Const (2w:word64);
+     e_accept = Const (1w:word64);
+     e_reject = Const (0w:word64);
+     e_var_trans = (Var Local (strlit "trans"):64 exp);
+     pr_accept = Break:64 prog;
+     pr_reject = Break:64 prog;
+   in
+     do
+       m <- ALOOKUP pars_ms "start";
+       pr_start <- compile_parser_states $ m;
+       pr_if'' <<- If ((Cmp Equal) e_var_trans e_reject) pr_reject Skip;
+       pr_if' <<- If ((Cmp Equal) e_var_trans e_accept) pr_accept pr_if'';
+       pr_if <<- If ((Cmp Equal) e_var_trans e_start) pr_start pr_if';
+       return $ (env, While (Const (1w:word64)) (Dec (strlit "trans") One e_start pr_if))
+     od)
 End
 
 (* TODO *)
 Definition compile_control_def:
   compile_control env tbl_map = NONE
- (* get prog back (a Seq prog prog likly *)
 End
 
 (* TODO *)
 Definition compile_pblock_def:
   compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_ms, tbl_map) =
-    case pbl_type of
-      pbl_type_parser => (case sd_list of (sdpairs) =>
-        do
-          (env', pr) <- compile_parser env pars_ms;
-          let p = MAP (\(l,r).l) (sdpairs) in                                                           
-            let p' = MAP (\x.(x, One)) p in
-             let decl =
-         <|   name        := strlit n
-            ; inline      := F
-            ; export      := F
-            ; params      := p'
-            ; body        := pr
-            ; return      := One
-         |> :word64 fun_decl in
-               return (env', decl)
-        od)
-    | pbl_type_control => NONE
+  case pbl_type of
+    pbl_type_parser =>
+          do
+            (env', pr) <- compile_parser env pars_ms;
+            (let
+               prms = MAP (\(l,r).(l, One)) sd_list;
+               decl =
+               <|     name        := strlit n
+                    ; inline      := F
+                    ; export      := F
+                    ; params      := prms
+                    ; body        := pr
+                    ; return      := One
+               |> :64 fun_decl;
+             in
+               return (env', decl))
+          od
+  | pbl_type_control => NONE
 End
+
 
 (* Returns (:decl list) *)
 Definition compile_pblocks_def:
@@ -275,13 +261,13 @@ End
 
 (* (ab_list # pblock_map # 'a ffblock_map # 'a input_f # 'a output_f # 'a copyin_pbl # 'a copyout_pbl # 'a apply_table_f # 'a ext_map # func_map) *)
 Definition compile_actx_def:
-  compile_actx env (abs, ((_, pblock_ms) _), _, _, _, _, _, _, _, func_map) =
+  compile_actx env (abs, (_, pblock_ms), _, _, _, _, _, _, _, func_map) =
   do
     (env', decls) <- compile_archblocks env pblock_ms abs;
     return (env', decls)
   od
 End
-
+(*
 (*---PRE-PASS & SETUP---*)
       
 (*

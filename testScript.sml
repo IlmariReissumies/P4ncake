@@ -14,11 +14,11 @@ Libs
       return x
 
    in P4 abstract syntax
- *)
+*)
 Quote example1 = Term:
   stmt_seq
-    (stmt_ass (lval_varname (varn_name "x")) (e_var (varn_name "y")))
-    (stmt_ret (e_var (varn_name "x")))
+  (stmt_ass (lval_varname (varn_name "x")) (e_var (varn_name "y")))
+  (stmt_ret (e_var (varn_name "x")))
 End
 
 (* Runs the compiler definitions on example_prog1
@@ -53,3 +53,25 @@ End
    example ARB sufficed
  *)
 val example2_run = EVAL “evaluate (^example2, ARB with clock := 10)”
+                        
+(*---------------------------------------------------------------------------------*)
+Quote ex1 = Term:
+  stmt_ass (lval_varname (varn_name "x")) (e_v (v_bool T))
+End
+
+val ex1_compile_thm = EVAL “compile_stmt ^ex1”
+        
+Quote ex2 = Term:
+  stmt_seq
+   (stmt_ass (lval_varname (varn_name "x")) (e_v (v_bool T)))
+   (stmt_ass (lval_varname (varn_name "y")) (e_binop (e_v (v_bool T)) (binop_bin_or) (e_v (v_bool F))))
+End
+
+val ex2_compile_thm = EVAL “compile_stmt ^ex2”
+
+Quote ex2pancake = Term:
+  (Seq (Assign Global «TEMP-VARNAME» (Const 1w))
+  (Assign Global «TEMP-VARNAME» (Op Or [Const 1w; Const 0w])))
+End
+
+val example2_run = EVAL “evaluate (^ex2pancake, ARB with clock := 10)”
