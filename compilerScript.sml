@@ -29,6 +29,10 @@ Definition varn_to_mlstring_def:
   varn_to_mlstring_def (varn_star funn) = strlit "TEMP-FUNNAME"
 End
 
+Definition RIGHT_list_def:
+  RIGHT_list l = MAP (\(l,r).r) l
+End
+
 (*--COMPILATION--*)
 (*
 Assumes that Pancake deals with overflowing values (for the saturated ADD and SUB).
@@ -80,53 +84,53 @@ Definition compile_unop_def:
 End
         
 Definition compile_exp_def:
-  compile_exp (e_binop e1 op e2)  =
+  compile_exp env (e_binop e1 op e2)  =
   do
-    e1' <- compile_exp e1;
-    e2' <- compile_exp e2;
-    return $ compile_binop (e1', op, e2')
+    (env', e1') <- compile_exp env e1;
+    (env', e2') <- compile_exp env e2;
+    return (env', compile_binop (e1', op, e2'))
   od                                     ∧       
-  compile_exp (e_unop op e)       =                     (* unop is only called on e=bool or bitv *)
+  compile_exp env (e_unop op e)       =                     (* unop is only called on e=bool or bitv *)
   do
-    e' <- compile_exp e;
-    return $ compile_unop (op, e')
+    (env', e') <- compile_exp env e;
+    return (env', compile_unop (op, e'))
   od                                     ∧
-  compile_exp (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
-  compile_exp (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
-  compile_exp (e_var varn)        = (case varn of
-    varn_name n  => return $ Var Local (strlit n)
+  compile_exp env (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
+  compile_exp env (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
+  compile_exp env (e_var varn)        = (case varn of
+    varn_name n  => return $ (env, Var Local (strlit n))
   | varn_star fn => NONE)                   ∧            
-  compile_exp (e_v val)           = (case val of
-    v_bool T     => return $ Const(1w:word64)
-  | v_bool F     => return $ Const(0w:word64)
+  compile_exp env (e_v val)           = (case val of
+    v_bool T     => return $ (env, Const(1w:word64))
+  | v_bool F     => return $ (env, Const(0w:word64))
   | v_bit (bools,n) =>
       let wrd_indx_list = ZIP ((MAP (\b.case b of T => 1w :word64 | F => 0w :word64) bools), (GENLIST (\m.m) n)) in
         let wrd = FOLDR (\(m,i) c.word_xor (word_lsl m i) c) (0w :word64) wrd_indx_list in
-          return $ Const wrd
+          return $ (env, Const wrd)
   | v_str s         => NONE
   | v_struct svs    => NONE                            (* put names into enviroment! *)
   | v_header hd svs => NONE
   | v_ext_ref i     => NONE
   | v_bot           => NONE)             ∧
-  compile_exp (e_acc e field)     = NONE ∧             
-  compile_exp (e_cast cast e)     = NONE ∧
-  compile_exp (e_struct fields)   = NONE ∧
-  compile_exp (e_header b fields) = NONE ∧             (*fields are (string#exp). Similar to a struct*)
-  compile_exp (e_select e ss s)   = NONE ∧             (*switch*)
-  compile_exp (e_slice e1 e2 e3)  = NONE ∧             (*bit-slice*)
-  compile_exp (e_concat e1 e2)    = NONE ∧             (*bit_strings*)
-  compile_exp _ = NONE
+  compile_exp env (e_acc e field)     = NONE ∧             
+  compile_exp env (e_cast cast e)     = NONE ∧
+  compile_exp env (e_struct fields)   = NONE ∧
+  compile_exp env (e_header b fields) = NONE ∧             (*fields are (string#exp). Similar to a struct*)
+  compile_exp env (e_select e ss s)   = NONE ∧             (*switch*)
+  compile_exp env (e_slice e1 e2 e3)  = NONE ∧             (*bit-senv'lice*)
+  compile_exp env (e_concat e1 e2)    = NONE ∧             (*bit_strings*)
+  compile_exp _ _ = NONE
 End
-  
+  (*
 Definition compile_exps_def:
-  compile_exps [] = return [] ∧
-  compile_exps (e::es) =
+  compile_exps env [] = return (env, [] ∧
+  compile_exps env (e::es) =
   do
-    pan_e  <- compile_exp e;
+    (env', pan_e)  <- compile_exp e;
     pan_es <- compile_exps es;
     return $ pan_e::pan_es
   od
-End
+End*)
    
 (* TODO
    - input enviroment/enviroment entvienment
@@ -134,45 +138,64 @@ End
    - return should check stack return varaibels? (not needed since type-checked already?)
 *)
 Definition compile_stmt_def:
-  compile_stmt (stmt_empty)                = return Skip ∧
-  compile_stmt (stmt_ass l_val e)          =
+  compile_stmt env (stmt_empty)                = return (env, Skip) ∧
+  compile_stmt env (stmt_ass l_val e)          =
   do
-    e' <- compile_exp e;
-    return $ Assign Global (lval_to_mlstring l_val) (e')
+    (env', e') <- compile_exp env e;
+    return (env', Assign Global (lval_to_mlstring l_val) (e'))
   od                                              ∧
-  compile_stmt (stmt_cond e stmt_t stmt_f) =
+  compile_stmt env (stmt_cond e stmt_t stmt_f) =
   do
-    e'  <- compile_exp e;
-    pt' <- compile_stmt stmt_t;
-    pf' <- compile_stmt stmt_f;
-    return $ If e' pt' pf'
+    (env', e')    <- compile_exp env e;
+    (env'', pt')  <- compile_stmt env' stmt_t;
+    (env''', pf') <- compile_stmt env' stmt_f;
+    return (env', If e' pt' pf')
   od                                              ∧
-  compile_stmt (stmt_block t_scope stmt)   = NONE ∧    
-  compile_stmt (stmt_ret e)                =
+  compile_stmt env (stmt_block t_scope stmt)   = NONE ∧    
+  compile_stmt env (stmt_ret e)                =
   do
-    e' <- (compile_exp e);
-    return $ Return e'
+    (env', e') <- (compile_exp env e);
+    return (env', Return e')
   od                                              ∧
-  compile_stmt (stmt_seq stmt1 stmt2)      =
+  compile_stmt env (stmt_seq stmt1 stmt2)      =
   do
-    p1' <- compile_stmt stmt1;
-    p2' <- compile_stmt stmt2;
-    return $ Seq p1' p2'
+    (env', p1')  <- compile_stmt env  stmt1;
+    (env'', p2') <- compile_stmt env' stmt2;
+    return (env'', Seq p1' p2')
   od                                              ∧
-  compile_stmt (stmt_trans e)              = NONE ∧       (* make/lookup number for this e_varname *)
-  compile_stmt (stmt_app x es)             = NONE ∧       (* Method call *)
-  compile_stmt (stmt_ext)                  = NONE ∧
-  compile_stmt _ = NONE                  
+  compile_stmt env (stmt_trans e)              = NONE ∧
+  compile_stmt env (stmt_app x es)             = NONE ∧       (* Method call *)
+  compile_stmt env (stmt_ext)                  = NONE ∧
+  compile_stmt _ _ = NONE                  
 End
 
 (*
-TODO:
-   - replace with actual function
-   
-Returns sequence of states.
+Returns sequence (panLang$Seq) of all stms in the given state.
+
+Definition compile_state_def:
+  compile_state env [] = return (env, Skip) ∧
+  compile_state env (stm::stms) =
+  do
+    (env', p) <- compile_stmt env stm;
+    (env'', p') <- compile_state env' stms;
+    let p'' = Seq p p' in
+      return (env'', p'')
+  od
+End
+*)   
+(*
+        - states : parser map ((state_name, stmt) alist)
+Returns sequence conditionals; one for every state.
 *)
-Definition compile_parser_states_def:
-  compile_parser_states (pm::pms) = return $ Assign Local (strlit "trans") (Const (1w:word64)) (* temporary hard-coded *)                 
+Definition compile_states_def:
+  compile_states env states =
+  do
+    (env', _, nums) <<- FOLDL (\(e,i,l) (st_name,_). (env with state_nums := (env.state_nums |+ (st_name, i)), i + (1w :word64), i::l) ) (env, (2w :word64), []) states;
+    l <- OPT_MMAP (compile_stmt env') (RIGHT_list states);
+    (seqs :64 prog list) <<- RIGHT_list l;
+    conds <<- FOLDR (\(num, seq) p. If (Cmp Equal (Var Local (strlit "trans")) (Const num)) seq p :64 prog) Skip (ZIP (nums,seqs));
+    return $ (env', conds)
+  od
 End
 
 
@@ -180,15 +203,15 @@ End
    - make pr_accept and pr_reject do more possible than just break
    - change term "Skip" in pr_if'' to the sequence of Ifs for rest of the possible states
    - remove "compile_parser_states" and replace with function that return updated env (with all states, including "start") instead.
+   - make the 'start' state name-generic (we can since the sd_list includes the name of the forst (i.e. 'start') state)? 
 *)
 (*
-The Parser is a state machine and and is in Pancake translated into a function containing a conditional blocks for every state. Required states are the states: Start, Accept, and Reject. The function also contains function-global variables (e.g. from paramathers).
+The Parser is a state machine and and is in Pancake translated into a function containing a conditional blocks for every state. Required states are the states: Start, Accept, and Reject. The function also contains function-global variables (e.g. from parameters).
 *)
 Definition compile_parser_def:
-  compile_parser env pars_ms =
+  compile_parser env pars_map =
   (let
-     e_trans = Const (2w:word64);
-     e_start = Const (2w:word64);
+     e_trans = Const (2w:word64); (* start state will always be first in the list of states and so always get value 2 *)
      e_accept = Const (1w:word64);
      e_reject = Const (0w:word64);
      e_var_trans = (Var Local (strlit "trans"):64 exp);
@@ -196,11 +219,9 @@ Definition compile_parser_def:
      pr_reject = Break:64 prog;
    in
      do
-       m <- ALOOKUP pars_ms "start";
-       pr_start <- compile_parser_states $ m;
-       pr_if'' <<- If ((Cmp Equal) e_var_trans e_reject) pr_reject Skip;
-       pr_if' <<- If ((Cmp Equal) e_var_trans e_accept) pr_accept pr_if'';
-       pr_if <<- If ((Cmp Equal) e_var_trans e_start) pr_start pr_if';
+       pr_states <- compile_states $ env pars_map
+       pr_if' <<- If ((Cmp Equal) e_var_trans e_reject) pr_reject pr_states;
+       pr_if <<- If ((Cmp Equal) e_var_trans e_accept) pr_accept pr_if';
        return $ (env, While (Const (1w:word64)) (Dec (strlit "trans") One e_start pr_if))
      od)
 End
@@ -210,13 +231,22 @@ Definition compile_control_def:
   compile_control env tbl_map = NONE
 End
 
-(* TODO *)
+(*
+        - pbl_type      : programmable block type
+        - sd_list       : list of (in order) 1. sequence of the first-level stmts in the block* 2. all paramathers and their direction
+        - b_func_map    :
+        - t_scope       :
+        - pars_ms       : maps/dictionaries for parser(s), mapping state names and their stmts
+        - tbl_map       :
+
+        *For parser blocks this will instead just be the 'invisible' transision to the start state
+*)
 Definition compile_pblock_def:
-  compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_ms, tbl_map) =
+  compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) =
   case pbl_type of
     pbl_type_parser =>
           do
-            (env', pr) <- compile_parser env pars_ms;
+            (env', pr) <- compile_parser env pars_map;
             (let
                prms = MAP (\(l,r).(l, One)) sd_list;
                decl =
@@ -280,7 +310,7 @@ Definition pre_pass_def:
   od
 End
 *)
-
+*)
 Definition env_setup_def:
   env_setup =
     let dict1 = FEMPTY : word64 state_dict in
