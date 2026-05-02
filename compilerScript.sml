@@ -15,11 +15,19 @@ Type staten_dict = “:64 exp |-> word64”
 Datatype:
   env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c |>
 End
+      
+Definition lLEFT_def:
+  lLEFT l = MAP (\(l,r).l) l
+End
+
+Definition lRIGHT_def:
+  lRIGHT l = MAP (\(l,r).r) l
+End
 
 (* TODO *)
 Definition lval_to_mlstring_def:
   lval_to_mlstring (lval_varname varname)   = strlit "TEMP-VARNAME" ∧
-  lval_to_mlstring (lval_null)              = strlit "TEMP-NULL--to_mlstring not finished"  ∧
+  lval_to_mlstring (lval_null)              = strlit "TEMP-NULL--to_mlstring not finished" ∧
   lval_to_mlstring (lval_field lval s)      = strlit "TEMP-FIELD-to_mlstring not finished" ∧
   lval_to_mlstring (lval_slice lval e1 e2)  = strlit "TEMP-SLICE-to_mlstring not finished" ∧
   lval_to_mlstring (lval_paren lval)        = strlit "TEMP-PAREN-to_mlstring not finished"
@@ -55,14 +63,6 @@ Definition string_to_struct_def:
      pan_wrds <<- MAP (\w.Const w) $ lLEFT wrds_pair;
      Struct $ pan_wrds
   od
-End
-
-Definition lLEFT_def:
-  lLEFT l = MAP (\(l,r).l) l
-End
-
-Definition lRIGHT_def:
-  lRIGHT l = MAP (\(l,r).r) l
 End
 
 (*--COMPILATION--*)
@@ -128,8 +128,8 @@ Definition compile_exp_def:
     return (env', compile_unop (op, e'))
   od                                     ∧
   compile_exp env (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
-  compile_exp env (e_list es)         = NONE ∧             (*let cs = map compile es in sequence maybe *)
-  compile_exp env (e_var varn)        = (case varn of
+  compile_exp env (e_list es)         = NONE ∧             (*Pancake array*)
+  compile_exp env (e_var varn)        = (case varn of      (* TODO: need lookup! *)
     varn_name n  => return $ (env, Var Local (strlit n))
   | varn_star fn => NONE)                   ∧            
   compile_exp env (e_v val)           = (case val of
@@ -143,7 +143,7 @@ Definition compile_exp_def:
          return $ (env, Const wrd))
   | v_str s         => return (env, string_to_struct s)
   | v_struct svs    => NONE
-  | v_header hd svs => NONE
+  | v_header b svs => NONE
   | v_ext_ref i     => NONE
   | v_bot           => NONE)             ∧
   compile_exp env (e_acc e field)     = NONE ∧             
@@ -167,7 +167,7 @@ Definition compile_stmt_def:
   compile_stmt env (stmt_ass l_val e)          =
   do
     (env', e') <- compile_exp env e;
-    return (env', Assign Global (lval_to_mlstring l_val) (e'))
+    return (env', Assign Global (lval_to_mlstring l_val) (e'))     (* TODO: check scope/env for Global/Local*)
   od                                              ∧
   compile_stmt env (stmt_cond e stmt_t stmt_f) =
   do
@@ -225,7 +225,7 @@ End
 
 (* TODO:
    - make pr_accept and pr_reject do more than just break
-   - make parser be seperate function?
+   - care about specific function call .extract(blah-blah) (puts argument into P4-header structure)  
 *)
 (*-------------------------------------------------
 The Parser is a state machine and and is in Pancake translated into a function containing a conditional blocks for every state. Required states are the states: Start, Accept, and Reject.
@@ -235,7 +235,7 @@ Returns: pair of; new enviroment and the panLang prog describing the whole parse
 Definition compile_parser_def:
   compile_parser env pars_map =
   (let
-     e_trans = Const (2w:word64); (* start state will always be first in the list of states and so always get value 2 *)
+     e_trans  = Const (2w:word64); (* start state will always be first in the list of states and so get value 2 *)
      e_accept = Const (1w:word64);
      e_reject = Const (0w:word64);
      e_var_trans = (Var Local (strlit "trans"):64 exp);
@@ -250,29 +250,95 @@ Definition compile_parser_def:
      od)
 End
 
-(* TODO *)
-Definition compile_control_def:
-  compile_control env tbl_map = NONE
+(*
+Definition compile_actions_def:
+  compile_actions env action_names (name, (mks, (default_action, params))) func_map (action, params) = 
+    (let
+     actions = FOLDL ((\as l (name, x). case compare_names as name of T -> (name, x)::l | F -> l ) action_names) [] func_map;
+     (env', actions') = OPT_MMAP (\(name, (body, arg_dirs)). (name, (compile_stmt env body, arg_dirs))) actions; 
+     action_ifs = FOLDL (\(name, (body, arg_dirs)) next. If (X == KEY) (body) (next)) (default_action) actions';
+   in
+     action_ifs)
+End
+*)
+
+(* TODO: Shape should depend on type t correctly *)
+Definition get_local_vars_def:
+  get_local_vars (_, pairs) = FOLDL (\l (t, v). (case t v of (tau_bool,      lval_varname v') => (case v' of (varn_name x) => ((strlit x), (One))::[] | _ => l)
+                                                           | (tau_bit st,    lval_varname v') => l
+                                                           | (tau_bot,       lval_varname v') => l
+                                                           | (tau_xtl st vs, lval_varname v') => l
+                                                           | (tau_ext,       lval_varname v') => l )) [] pairs
 End
 
+(* TODO: need for specific shapes (?) *)
+Definition to_params_def:
+  to_params sds = MAP (\(s,d). (s, One)) sds
+End
+
+(* TODO: directions (from sd_list) in the functions *)
 (*-------------------------------------------------
+Creates a new function above the control function block in Pancake for every control-block local function. Currently not for the actions.
+
+Return: enviroment and list of Pancake function declerations
+-------------------------------------------------*)
+Definition compile_block_functions_def:
+  compile_block_functions env vars [] = return (env, []) ∧
+  compile_block_functions env vars ((n, (b, (a, d)))::b_funcs) =
+  do
+    prms <<- (to_params a) ++ vars;
+    (env', body) <- compile_stmt env b;
+    decl <<-
+        <|     name   := strlit n
+             ; inline := F
+             ; export := F
+             ; params := prms
+             ; body   := body
+             ; return := One
+        |>;
+    (env'', decls) <- compile_block_functions env' vars b_funcs;
+    return (env'', decl::decls)
+  od                               
+End
+
+Definition compile_control_def:
+  compile_control env n b_func_map func_map sd_list tbl_map t_scope =
+     do
+       vars <<- get_local_vars t_scope;
+       prms <<- to_params sd_list;
+       cntrl_decl <<-
+       <|      name   := strlit n
+             ; inline := F
+             ; export := F
+             ; params := prms
+             ; body   := Skip :64 prog
+             ; return := One
+       |>;
+       (env', decls) <- compile_block_functions env vars b_func_map;
+       return (env', cntrl_decl::decls)
+     od
+End
+
+(*
+-------------------------------------------------
     - pbl_type      : programmable block type
-    - sd_list       : list of (in order) 1. sequence of the first-level stmts in the block* 2. all paramathers and their direction
-    - b_func_map    :
+    - sd_list       : list of (in order) 1. sequence of the first-level stmts in the block* 2. all paramaters and their direction
+    - b_func_map    : maps block-local function names with their bodies and parameters
     - t_scope       :
     - pars_ms       : maps/dictionaries for parser(s), mapping state names and their stmts
-    - tbl_map       :
+    - tbl_map       : table name and, match-kind- ... and paramether, tuple
 
         *For parser blocks this will instead just be the 'invisible' transision to the start state
--------------------------------------------------*)
+-------------------------------------------------
+*)
 Definition compile_pblock_def:
-  compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) =
+  compile_pblock env n (pbl_type, sd_list, b_func_map, t_scope, pars_map, tbl_map) func_map =
   case pbl_type of
     pbl_type_parser =>
           do
             (env', pr) <- compile_parser env pars_map;
             (let
-               prms = MAP (\(l,r).(l, One)) sd_list;
+               prms = to_params sd_list;
                decl =
                <|     name        := strlit n
                     ; inline      := F
@@ -282,48 +348,52 @@ Definition compile_pblock_def:
                     ; return      := One
                |> :64 fun_decl;
              in
-               return (env', decl))
+               return (env', decl::[]))
           od
-  | pbl_type_control => NONE
+  | pbl_type_control =>
+          do
+            (env', decls) <- compile_control env n b_func_map func_map sd_list tbl_map t_scope;
+            return (env', decls)
+          od
 End
 
 
 (* Returns (:decl list) *)
 Definition compile_pblocks_def:
-  compile_pblocks env [] = return (env, []) ∧
-  compile_pblocks env (pa::pas) = case pa of (n, pbl) =>
+  compile_pblocks env [] _  = return (env, []) ∧
+  compile_pblocks env ((n, pbl)::pas) func_map =
    do
-     (env', decl)  <- compile_pblock env n pbl;
-     (env'', decls) <- compile_pblocks env' pas;
-     return $ (env'', (decl::decls))
+     (env', decl)  <- compile_pblock env n pbl func_map;
+     (env'', decls) <- compile_pblocks env' pas func_map;
+     return (env'', (decl ++ decls))
    od                   
 End
 
 (* TODO *)
 Definition compile_archblocks_def:
-  compile_archblocks env _ [] = return (env, []) ∧
-  compile_archblocks env pblock_ms (ablock::ablocks) = case ablock of
+  compile_archblocks env _ [] _ = return (env, []) ∧
+  compile_archblocks env pblock_ms (ablock::ablocks) func_map = case ablock of
     arch_block_inp => NONE
   | arch_block_pbl _ _ =>
       do
-        (env',decls) <- compile_pblocks env pblock_ms;   
+        (env',decls) <- compile_pblocks env pblock_ms func_map;   
         return $ (env',decls)
       od
   | arch_block_ffbl s => NONE
   | arch_block_out => NONE
 End
 
+        
 (* (ab_list # pblock_map # 'a ffblock_map # 'a input_f # 'a output_f # 'a copyin_pbl # 'a copyout_pbl # 'a apply_table_f # 'a ext_map # func_map) *)
 Definition compile_actx_def:
-  compile_actx env (abs, (_, pblock_ms), _, _, _, _, _, _, _, func_map) =
+  compile_actx env (abs, (_, pblock_ms), _, _, _, _, _, apply_table, _, func_map) =
   do
-    (env', decls) <- compile_archblocks env pblock_ms abs;
+    (env', decls) <- compile_archblocks env pblock_ms abs func_map;
     return (env', decls)
   od
 End
-(*
+
 (*---PRE-PASS & SETUP---*)
-      
 (*
 Definition pre_pass_def:
   pre_pass_def env =
@@ -334,7 +404,7 @@ Definition pre_pass_def:
   od
 End
 *)
-*)
+
 Definition env_setup_def:
   env_setup =
     let dict1 = FEMPTY : word64 state_dict in
