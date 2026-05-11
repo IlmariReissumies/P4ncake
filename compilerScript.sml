@@ -7,13 +7,17 @@ Ancestors
 val _ = monadsyntax.temp_add_monadsyntax()
 val _ = monadsyntax.enable_monad "option"
                    
-(*--AUXILIARY--*)
+(*-------------------------------------------------*)
+(*                 AUXILIRARY                      *)
+(*-------------------------------------------------*)
 Type state_dict  = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict  = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
-Type staten_dict = “:64 exp |-> word64”  
+Type staten_dict = “:64 exp |-> word64”
+Type scope = “:(varname list) list”
+Type out_pos_exp_dict = “:varname |-> num list” (* Function to parameter position *)
 
 Datatype:
-  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c |>
+  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c ; var_scope : 'd ; out_exp : 'e |>
 End
       
 Definition lLEFT_def:
@@ -39,7 +43,6 @@ Definition varn_to_mlstring_def:
   varn_to_mlstring_def (varn_star funn) = strlit "TEMP-FUNNAME"
 End
 
-       
 (* Returns: (word64), (num list) *)
 Definition chars_to_word_def:
   chars_to_word [] = (0w, []) ∧
@@ -65,7 +68,9 @@ Definition string_to_struct_def:
   od
 End
 
-(*--COMPILATION--*)
+(*-------------------------------------------------*)
+(*                  COMPILER                       *)
+(*-------------------------------------------------*)
 (*
 Assumes that Pancake deals with overflowing values (for the saturated ADD and SUB).
         
@@ -127,7 +132,22 @@ Definition compile_exp_def:
     (env', e') <- compile_exp env e;
     return (env', compile_unop (op, e'))
   od                                     ∧
-  compile_exp env (e_call funn es)    = NONE ∧             (*a stmt in Pancake, also has actions and extern calls*)
+  compile_exp env (e_call funn es)    =
+  do
+    case env.ass_var of
+      strlit "" =>
+        do
+          (* TODO: do normal call *)
+        od
+    | var_name  =>
+        do
+          function_name <- lval_to_mlstring funn;
+          out_inds <- env.out_exp function_name;
+          s1 <<- DecCall var_name One function_name (OPT_MMAP compile_exp es) Skip; (* TODO: deal with shape! *)
+          s2 <<- FOLDL (\s (name,e_pan). Seq (Assign Local name e_pan) s) Skip out_exps;
+          return (env', Seq s1 s2)
+        od
+  od ∧
   compile_exp env (e_list es)         = NONE ∧             (*Pancake array*)
   compile_exp env (e_var varn)        = (case varn of      (* TODO: need lookup! *)
     varn_name n  => return $ (env, Var Local (strlit n))
@@ -164,11 +184,13 @@ End
 *)
 Definition compile_stmt_def:
   compile_stmt env (stmt_empty)                = return (env, Skip) ∧
-  compile_stmt env (stmt_ass l_val e)          =
+  compile_stmt env (stmt_ass lval e)          =
   do
-    (env', e') <- compile_exp env e;
-    return (env', Assign Global (lval_to_mlstring l_val) (e'))     (* TODO: check scope/env for Global/Local*)
-  od                                              ∧
+    env' <- env.ass_var := lval_to_mlstring lval;
+    (env'', e') <- compile_exp env' e;
+    env''' <- env.ass_var := lval_to_mlstring "";
+    return (env''', Assign Local (lval_to_mlstring lval) (e'))     (* TODO: check scope/env for Global/Local?*)
+  od ∧
   compile_stmt env (stmt_cond e stmt_t stmt_f) =
   do
     (env', e')    <- compile_exp env e;
@@ -192,16 +214,19 @@ Definition compile_stmt_def:
   do
     (env', pan_e) <- (compile_exp env e);
     wrd <- FLOOKUP env.state_nums pan_e;
-        return (env', Seq (Assign Local (strlit "trans") (Const wrd)) Break)    
+    return (env', Seq (Assign Local (strlit "trans") (Const wrd)) Break)    
   od ∧
-  compile_stmt env (stmt_app x es)             = NONE ∧       (* Method call *)
+  compile_stmt env (stmt_app x es)             =
+  do
+
+  od ∧
   compile_stmt env (stmt_ext)                  = NONE ∧
   compile_stmt _ _ = NONE                  
 End
 
  
 (*-------------------------------------------------
-Does:
+fDoes:
     - Updates enviroment giving every state in block an unique number
     - Compiles each states' stmts
     - Puts those stmts into panLang conditionals (one for each state) with comp. of "trans"-variable and unique number as guard
@@ -276,20 +301,24 @@ Definition to_params_def:
   to_params sds = MAP (\(s,d). (s, One)) sds
 End
 
+        
 (* TODO: directions (from sd_list) in the functions *)
 (*-------------------------------------------------
-Creates a new function above the control function block in Pancake for every control-block local function. Currently not for the actions.
+Creates a new function above the control function block in Pancake for every control-block local function. Saves index for every "out" or "inout" parameter in enviroment.
+
+
+TODO: Currently not for the actions.
 
 Return: enviroment and list of Pancake function declerations
 -------------------------------------------------*)
 Definition compile_block_functions_def:
   compile_block_functions env vars [] = return (env, []) ∧
-  compile_block_functions env vars ((n, (b, (a, d)))::b_funcs) =
+  compile_block_functions env vars ((n, (stmt, ad_list))::b_funcs) =
   do
-    prms <<- (to_params a) ++ vars;
-    (env', body) <- compile_stmt env b;
+    prms <<- (to_params (lLeft ad_list)) ++ vars;
+    (env', body) <- compile_stmt env stmt;
     decl <<-
-        <|     name   := strlit n
+        <|     name   := lval_to_mlstring n
              ; inline := F
              ; export := F
              ; params := prms
@@ -297,8 +326,17 @@ Definition compile_block_functions_def:
              ; return := One
         |>;
     (env'', decls) <- compile_block_functions env' vars b_funcs;
-    return (env'', decl::decls)
+    out_ind_list <<- FOLDL (\l ((s, d), ind).  
+                           case d of
+                             d_out -> ind::l
+                           | d_inout -> ind::l
+                           | _ -> l) [] ZIP (ad_list, (GENLIST (\m.m) n))
+    env'' with out_exp := env''.out_exp |+ (lval_to_mlstring n, out_ind_list)
   od                               
+End
+
+Definition compile_action_tables_def:
+  compile_action_tables env vars b_func_map = 
 End
 
 Definition compile_control_def:
@@ -306,16 +344,19 @@ Definition compile_control_def:
      do
        vars <<- get_local_vars t_scope;
        prms <<- to_params sd_list;
+       (env', stmts) <- compile_action_tables env vars b_func_map;
+       b <- lookup_block_body n b_func_map;
+       (env'', b') <- compile_stmt env' b;
        cntrl_decl <<-
        <|      name   := strlit n
              ; inline := F
              ; export := F
              ; params := prms
-             ; body   := Skip :64 prog
+             ; body   := b' 
              ; return := One
        |>;
-       (env', decls) <- compile_block_functions env vars b_func_map;
-       return (env', cntrl_decl::decls)
+       (env''', decls) <- compile_block_functions env'' vars b_func_map;
+       return (env''', cntrl_decl::decls)
      od
 End
 
@@ -393,28 +434,24 @@ Definition compile_actx_def:
   od
 End
 
-(*---PRE-PASS & SETUP---*)
-(*
-Definition pre_pass_def:
-  pre_pass_def env =
-  do
-    env' <- make_decls env
-    env'' <- scopes_prepass env'
-    env''' <- field_to_indices env''
-  od
-End
-*)
-
+(*-------------------------------------------------*)
+(*               PRE-PASS & SETUP                  *)
+(*-------------------------------------------------*)
 Definition env_setup_def:
   env_setup =
-    let dict1 = FEMPTY : word64 state_dict in
-      let dict2 = FEMPTY : scope_dict in
-        let dict3 = FEMPTY : staten_dict in
-          let env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 |> in
-            return env
+  (let
+    dict1 = FEMPTY : word64 state_dict;
+    dict2 = FEMPTY : scope_dict;
+    dict3 = FEMPTY : staten_dict;
+    stack1 = [[]] : scope;
+    dict4 = FEMPTY : word64 out_pos_exp_dict;
+    env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 ; var_scope := stack1 ; out_exp := dict4 |>;
+   in
+     return env)
 End
-(*
-(*---ENTRY---*)
+(*-------------------------------------------------*)
+(*                    ENTRY                        *)
+(*-------------------------------------------------*)
 Definition compile_def:
   compile_def =
   do
@@ -425,4 +462,4 @@ Definition compile_def:
     | SOME => NONE (*some_pancake_function pancake_program*)
   od
 End
-*)
+
