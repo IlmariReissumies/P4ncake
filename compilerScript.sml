@@ -13,11 +13,10 @@ val _ = monadsyntax.enable_monad "option"
 Type state_dict  = “:varname |-> ('a prog list)” (* To create stmts for the state-machine if-elses *)
 Type scope_dict  = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 Type staten_dict = “:64 exp |-> word64”
-Type scope = “:(varname list) list”
 Type out_ind_dict = “:varname |-> num list” (* Function to parameter position *)
 
 Datatype:
-  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c ; var_scope : 'd ; out_ind : 'e |>
+  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c ; out_ind : 'd ; table : e' |>
 End
       
 Definition lLEFT_def:
@@ -256,22 +255,19 @@ Definition compile_stmt_def:
     wrd <- FLOOKUP env.state_nums pan_e;
     return (env', Seq (Assign Local (strlit "trans") (Const wrd)) Break)    
   od ∧
-  compile_stmt env (stmt_app x es)             =
-  do
-
-  od ∧
+  compile_stmt env (stmt_app x es)             = NONE ∧
   compile_stmt env (stmt_ext)                  = NONE ∧
   compile_stmt _ _ = NONE                  
 End
 
  
 (*-------------------------------------------------
-fDoes:
+Does:
     - Updates enviroment giving every state in block an unique number
     - Compiles each states' stmts
     - Puts those stmts into panLang conditionals (one for each state) with comp. of "trans"-variable and unique number as guard
         
-Paramathers:
+Parameters:
     - states : ((state_name, stmt) alist)
         
 Returns: sequence of panLang conditionals
@@ -315,18 +311,6 @@ Definition compile_parser_def:
      od)
 End
 
-(*
-Definition compile_actions_def:
-  compile_actions env action_names (name, (mks, (default_action, params))) func_map (action, params) = 
-    (let
-     actions = FOLDL ((\as l (name, x). case compare_names as name of T -> (name, x)::l | F -> l ) action_names) [] func_map;
-     (env', actions') = OPT_MMAP (\(name, (body, arg_dirs)). (name, (compile_stmt env body, arg_dirs))) actions; 
-     action_ifs = FOLDL (\(name, (body, arg_dirs)) next. If (X == KEY) (body) (next)) (default_action) actions';
-   in
-     action_ifs)
-End
-*)
-
 (* TODO: Shape should depend on type t correctly *)
 Definition get_local_vars_def:
   get_local_vars (_, pairs) = FOLDL (\l (t, v). (case t v of (tau_bool,      lval_varname v') => (case v' of (varn_name x) => ((strlit x), (One))::[] | _ => l)
@@ -336,14 +320,14 @@ Definition get_local_vars_def:
                                                            | (tau_ext,       lval_varname v') => l )) [] pairs
 End
 
-(* TODO: need for specific shapes (?) *)
+(* TODO: need for specific shapes *)
 Definition to_params_def:
   to_params sds = MAP (\(s,d). (s, One)) sds
 End
 
         
 (*-------------------------------------------------
-Creates a new function (above the control function block in Pancake) for every control-block local function. Saves index for every "out" or "inout" parameter for that function (as name and num-list pair) in enviroment to be used for copy-out during function calls. Adds all control-block local variables as paramathers to the function.
+Does: Creates a new function (above the control function block in Pancake) for every control-block local function. Saves index for every "out" or "inout" parameter for that function (as name and num-list pair) in enviroment to be used for copy-out during function calls. Adds all control-block local variables as paramathers to the function.
 
 
 TODO: Make sure list of function declerations match order of those functions declared in memory! (top-to-bottom OR bottom-to-top)
@@ -376,49 +360,55 @@ Definition compile_block_functions_def:
   od                               
 End
 
-Definition generate_variable_matching_def:
-  generate_variable_matching env (x, s) v =
-  (let
-     (env', r) = generate_varname env;
-     Seq s $ DecCall r One env.match_fun  $ Assign Local n (Op And [ret_val]::[n])
+Definition generate_action_matching_def:
+  generate_action_matching env prms =
+  do
+    (env', x) <<- generate_varname env;
+    v_l1::v_ls <<- lCOPY prms;
+    (env'', s_l1::s_ls) <- FOLDL (\(e, x_p) x. let (e', x_p') = compile_exp e x in (e', x_p::x_p') ) (env', []) sls;
+    
+    s <<- DecCall x One env.match_fun [v_l1]::[s_l1] Skip;
+    prog <<- FOLDL ((\env prev v. let (env', r) = generate_varname env
+                                       in (x, Seq s $ DecCall r One env.match_fun v_l::s_l $ Assign Local x (Op And [r]::[x])))) env'') (x, s) ZIP (v_ls, s_ls);
+    return (env'', x, prog)
+  od
 End
         
 (*
-Ebpf-architecture specific table matching function (as of yet). Assumes a library function in Pancake that does matching according to ebpf semantics.
-
-To match ebpf semantics the generated function will use three variables keeping track of current priority, possible action and if a valid action has yet been found.
-
-Action names are reffered to as 0....n :word64, i.e. according to which row in the table they belong. 
-
-Returns: pair of enviroment and list of function declerations (one for every action table); : (env-rec # panLang$fun list).
+Ebpf-architecture specific table matching function (as of yet).
 *)
 Definition compile_action_tables_def:
   compile_action_tables env vars [] = return (env, []) ∧
   compile_action_tables env vars (table_name, (mks, (default_action, es)))::ts =
   do
-    (env', prms) <- OPT_MMAP (compile_exp env) es;
+    (env', prms) <- FOLDL (\(e, x_p) x. let (e', x_p') = compile_exp e x in (e', x_p::x_p') ) (env, []) es;
     b <<- Skip;
 
     case env.tbl of
-      ((sls, prio), a)::tbls =>
+      tbls =>
         do
           (env'', action) <<- generate_varname env';
           (env''', priority) <<- generate_varname env'';
-          (env'''', found) <<- generate_varname env''';
-          
-          (env5, x) <<- generate_varname env4;
-          v_l1::v_ls <<- lCOPY prms;
+          (env4, found) <<- generate_varname env''';
                  
-          (env6, s_ls) <- OPT_MMAP (compile_exp env5) sls;
-          
-          s <<- DecCall x One env.match_fun [v_l1]::[s_l1] Skip;
-          
-            
-          decl1 <<- FOLDL ((\env prev v. generate_variable_matching env prev v) env6) (x, s) ZIP (v_ls, s_ls);
-          
-          (* b <<-    Dec action One (Const w0 :64 word) $ Dec priority One (Const w0 :64 word) $ Dec found One (Const w0 :64 word) $ ...) *)
+          s <<- Dec action One (Const w0 :64 word) $ Dec priority One (Const w0 :64 word) $ Dec found One (Const w0 :64 word) Skip;
+          fun_end <<- Return TopAddr; (* TODO *)
+          tbls' <- FOLDR ((\(e, prev) ((s, p), a). do (e', s'); return ((s',p),a)::prev) env) [] tbls;
+          (env5, prog) <<- FOLDL((\v_ls (e, prev) action priority found ((s_ls, prio), a).
+                                    (let
+                                       (e', x, p_a) = generate_action_matching e v_ls s_ls;
+                                       ass_a    = Assign Local action a;
+                                       ass_prio = Assign Local priority prio;
+                                       p_true   = If (Op (Cmp lower) [priority]::[prio]) (Seq ass_a ass_prio) (Skip);
+                                       p_false  = Seq ass_a ass_prio;
+                                       p_true'  = If found p_true p_false;
+                                       p_false' = Skip;
+                                       p_conds  = Seq (If x p_true' p_false') (Skip);
+                                     in
+                                       (e', Seq (Seq p_a p_conds) prev))) v_ls action priority found) (env4, fun_end) tbls';      
+          b <<- prog)
         od
-    | [] => )
+    | [] =>)
     decl <<-
          <|       name   := get_fun_name n
                 ; inline := F
@@ -501,7 +491,7 @@ Definition compile_pblocks_def:
    od                   
 End
 
-(* TODO *)
+(* TODO --- all block types *)
 Definition compile_archblocks_def:
   compile_archblocks env _ [] _ = return (env, []) ∧
   compile_archblocks env pblock_ms (ablock::ablocks) func_map = case ablock of
@@ -514,8 +504,7 @@ Definition compile_archblocks_def:
   | arch_block_ffbl s => NONE
   | arch_block_out => NONE
 End
-
-(*``func_map:((string, (stmt # (string # d) list)) alist)``*)
+        
 Definition compile_global_funs_def:
   compile_global_funs env [] = return (env, [])
   compile_global_funs env (s, (stmt, sd_list))::func_map =
@@ -535,8 +524,6 @@ Definition compile_global_funs_def:
   od
 End
 
-        
-(* (ab_list # pblock_map # 'a ffblock_map # 'a input_f # 'a output_f # 'a copyin_pbl # 'a copyout_pbl # 'a apply_table_f # 'a ext_map # func_map) *)
 Definition compile_actx_def:
   compile_actx env (abs, (_, pblock_ms), _, _, _, _, _, apply_table, _, func_map) =
   do
@@ -551,14 +538,13 @@ End
 (*                    SETUP                        *)
 (*-------------------------------------------------*)
 Definition env_setup_def:
-  env_setup =
+  env_setup ((_, _, _, tbl), _, _, _) =
   (let
     dict1 = FEMPTY : word64 state_dict;
     dict2 = FEMPTY : scope_dict;
     dict3 = FEMPTY : staten_dict;
     dict4 = FEMPTY : word64 out_ind_dict;
-    stack1 = [[]] : scope;
-    env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 ; var_scope := stack1 ; out_ind := dict4 |>;
+    env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 ; out_ind := dict4 ; table := tbl |>;
    in
      return env)
 End
@@ -568,12 +554,12 @@ End
 (*-------------------------------------------------*)
 
 (*
-   Should also include aenv (i.e. input enviroment/state) as input paremeter.
+   For now, aenv is assumed to have 'a <- ebpf_scope, thus is only for the ebpf architecture.
 *)
 Definition compile_def:
-  compile_def actx =
+  compile_def actx (aenv, _, _, _) =
   do
-    let env = env_setup in
+    let env = env_setup aenv in
     pancake_program <- compile_prog env actx;
     case pancake_program of
       NONE => "Throw some error"
