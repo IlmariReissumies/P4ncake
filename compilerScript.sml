@@ -14,10 +14,10 @@ Type state_dict  = “:varname |-> ('a prog list)” (* To create stmts for the 
 Type scope_dict  = “:varname |-> varkind”        (* Global or Local, for funn and varnn *)
 Type staten_dict = “:64 exp |-> word64”
 Type scope = “:(varname list) list”
-Type out_pos_exp_dict = “:varname |-> num list” (* Function to parameter position *)
+Type out_ind_dict = “:varname |-> num list” (* Function to parameter position *)
 
 Datatype:
-  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c ; var_scope : 'd ; out_exp : 'e |>
+  env_rec = <| states : 'a ; scopes : 'b; state_nums : 'c ; var_scope : 'd ; out_ind : 'e |>
 End
       
 Definition lLEFT_def:
@@ -68,6 +68,30 @@ Definition string_to_struct_def:
   od
 End
 
+Definition get_fun_name_def:
+  get_fun_name s = NONE
+End
+
+Definition get_var_name_def:
+  get_var_name s = NONE
+End
+
+Definition to_no_name_def:
+  to_no_name = strlit ""
+End
+
+(* Generates a new, unique (to this compiler!) variable_name *)
+(* TODO: to implement a true unique name-generator we need to rename all variable also *)
+Definition generate_varname_def:
+  generate_varname = NONE
+End
+
+(* Generates a list of Varnames, all unique. Empty list results in 'no name' and, thus, returns an empty list. *)
+(* TODO: to implement a true unique name-generator we need to rename all variable also *)
+Definition generate_varnames_def:
+  generate_varname [] = []
+  generate_varnames l = NONE
+End
 (*-------------------------------------------------*)
 (*                  COMPILER                       *)
 (*-------------------------------------------------*)
@@ -141,14 +165,18 @@ Definition compile_exp_def:
         od
     | var_name  =>
         do
-          function_name <- lval_to_mlstring funn;
-          out_inds <- env.out_exp function_name;
-          s1 <<- DecCall var_name One function_name (OPT_MMAP compile_exp es) Skip; (* TODO: deal with shape! *)
-          s2 <<- FOLDL (\s (name,e_pan). Seq (Assign Local name e_pan) s) Skip out_exps;
+          function_name <- get_fun_name funn;
+          args_pan      <- compile_exp es
+          out_iv_pair   <- env.out_ind_value_pairs function_name;
+          out_vars      <- OPT_MMAP ((\as i. get_element i as) args_pan) (lLEFT out_iv_pair);
+          out_var_names <- OPT_MMAP (\e. case e of (Var v_kind v_name) => SOME v_name | _ => NONE) out_vars;
+          s1   <<- DecCall var_name One function_name (OPT_MMAP args_pan) Skip;                                          (* TODO: deal with shape! *)
+          s2   <<- FOLDL (\s (name, v). Seq (Assign Local name v) s) Skip ZIP (out_vnms, (lRIGHT out_iv_pair));
+          env' <<- env with ass_var := get_no_name;
           return (env', Seq s1 s2)
         od
   od ∧
-  compile_exp env (e_list es)         = NONE ∧             (*Pancake array*)
+  compile_exp env (e_list es)         = NONE ∧             
   compile_exp env (e_var varn)        = (case varn of      (* TODO: need lookup! *)
     varn_name n  => return $ (env, Var Local (strlit n))
   | varn_star fn => NONE)                   ∧            
@@ -163,7 +191,7 @@ Definition compile_exp_def:
          return $ (env, Const wrd))
   | v_str s         => return (env, string_to_struct s)
   | v_struct svs    => NONE
-  | v_header b svs => NONE
+  | v_header b svs  => NONE
   | v_ext_ref i     => NONE
   | v_bot           => NONE)             ∧
   compile_exp env (e_acc e field)     = NONE ∧             
@@ -184,13 +212,25 @@ End
 *)
 Definition compile_stmt_def:
   compile_stmt env (stmt_empty)                = return (env, Skip) ∧
-  compile_stmt env (stmt_ass lval e)          =
-  do
-    env' <- env.ass_var := lval_to_mlstring lval;
-    (env'', e') <- compile_exp env' e;
-    env''' <- env.ass_var := lval_to_mlstring "";
-    return (env''', Assign Local (lval_to_mlstring lval) (e'))     (* TODO: check scope/env for Global/Local?*)
-  od ∧
+  compile_stmt env (stmt_ass lval e)           =
+  (case env.out_s_ind_pairs of
+     [] =>
+      do
+        env' <- env with ass_var := lval_to_mlstring lval;
+        (env'', e') <- compile_exp env' e;
+        env''' <- env'' with ass_var := strlit "";
+        return (env''', Assign Local (lval_to_mlstring lval) (e'))
+      od 
+   | pairs  =>
+      do
+        name <- get_var_name lval;
+        env' <<- env with ass_var := name;
+        (env'', e_pan) <- compile_exp env' e;
+        env''' <<- env'' with ass_var := strlit "";
+        ind <- FOLDL ((\n i (s, ind). if ((get_var_name s) == n) then (SOME i) else NONE) name) (SOME 0) pairs;
+        env4 <<- env''' with out_ind_val_pairs := env'''.out_ind_val_pairs |+ (ind, e_pan);
+        return (env''', Assign Local (name) (e_pan))
+      od ) ∧
   compile_stmt env (stmt_cond e stmt_t stmt_f) =
   do
     (env', e')    <- compile_exp env e;
@@ -302,12 +342,11 @@ Definition to_params_def:
 End
 
         
-(* TODO: directions (from sd_list) in the functions *)
 (*-------------------------------------------------
-Creates a new function above the control function block in Pancake for every control-block local function. Saves index for every "out" or "inout" parameter in enviroment.
+Creates a new function (above the control function block in Pancake) for every control-block local function. Saves index for every "out" or "inout" parameter for that function (as name and num-list pair) in enviroment to be used for copy-out during function calls. Adds all control-block local variables as paramathers to the function.
 
 
-TODO: Currently not for the actions.
+TODO: Make sure list of function declerations match order of those functions declared in memory! (top-to-bottom OR bottom-to-top)
 
 Return: enviroment and list of Pancake function declerations
 -------------------------------------------------*)
@@ -316,27 +355,79 @@ Definition compile_block_functions_def:
   compile_block_functions env vars ((n, (stmt, ad_list))::b_funcs) =
   do
     prms <<- (to_params (lLeft ad_list)) ++ vars;
-    (env', body) <- compile_stmt env stmt;
+    out_s_ind_pairs <<- FOLDL (\l ((s, d), ind).  
+                             case d of
+                               d_out -> (s, ind)::l
+                             | d_inout -> (s, ind)::l
+                             | _ -> l) [] ZIP (ad_list, (GENLIST (\m.m) m));
+    env' <<- env' with out_sinds := out_s_ind_pairs;
+    (env'', b) <- compile_stmt env' stmt;
     decl <<-
-        <|     name   := lval_to_mlstring n
+        <|     name   := get_fun_name n
              ; inline := F
              ; export := F
              ; params := prms
-             ; body   := body
+             ; body   := b
              ; return := One
         |>;
-    (env'', decls) <- compile_block_functions env' vars b_funcs;
-    out_ind_list <<- FOLDL (\l ((s, d), ind).  
-                           case d of
-                             d_out -> ind::l
-                           | d_inout -> ind::l
-                           | _ -> l) [] ZIP (ad_list, (GENLIST (\m.m) n))
-    env'' with out_exp := env''.out_exp |+ (lval_to_mlstring n, out_ind_list)
+    env''' <<- env'' with out_ind_value_pairs := env''.out_ind_value_pairs |+ (get_fun_name n, out_ind_list);
+    (env4, decls) <- compile_block_functions env''' vars b_funcs;
+    return (env4, decl::decls)
   od                               
 End
 
+Definition generate_variable_matching_def:
+  generate_variable_matching env (x, s) v =
+  (let
+     (env', r) = generate_varname env;
+     Seq s $ DecCall r One env.match_fun  $ Assign Local n (Op And [ret_val]::[n])
+End
+        
+(*
+Ebpf-architecture specific table matching function (as of yet). Assumes a library function in Pancake that does matching according to ebpf semantics.
+
+To match ebpf semantics the generated function will use three variables keeping track of current priority, possible action and if a valid action has yet been found.
+
+Action names are reffered to as 0....n :word64, i.e. according to which row in the table they belong. 
+
+Returns: pair of enviroment and list of function declerations (one for every action table); : (env-rec # panLang$fun list).
+*)
 Definition compile_action_tables_def:
-  compile_action_tables env vars b_func_map = 
+  compile_action_tables env vars [] = return (env, []) ∧
+  compile_action_tables env vars (table_name, (mks, (default_action, es)))::ts =
+  do
+    (env', prms) <- OPT_MMAP (compile_exp env) es;
+    b <<- Skip;
+
+    case env.tbl of
+      ((sls, prio), a)::tbls =>
+        do
+          (env'', action) <<- generate_varname env';
+          (env''', priority) <<- generate_varname env'';
+          (env'''', found) <<- generate_varname env''';
+          
+          (env5, x) <<- generate_varname env4;
+          v_l1::v_ls <<- lCOPY prms;
+                 
+          (env6, s_ls) <- OPT_MMAP (compile_exp env5) sls;
+          
+          s <<- DecCall x One env.match_fun [v_l1]::[s_l1] Skip;
+          
+            
+          decl1 <<- FOLDL ((\env prev v. generate_variable_matching env prev v) env6) (x, s) ZIP (v_ls, s_ls);
+          
+          (* b <<-    Dec action One (Const w0 :64 word) $ Dec priority One (Const w0 :64 word) $ Dec found One (Const w0 :64 word) $ ...) *)
+        od
+    | [] => )
+    decl <<-
+         <|       name   := get_fun_name n
+                ; inline := F
+                ; export := F
+                ; params := prms
+                ; body   := b
+                ; return := One
+         |>;
+  od
 End
 
 Definition compile_control_def:
@@ -344,9 +435,10 @@ Definition compile_control_def:
      do
        vars <<- get_local_vars t_scope;
        prms <<- to_params sd_list;
-       (env', stmts) <- compile_action_tables env vars b_func_map;
+       (env', decls) <- compile_block_functions env vars b_func_map;          (*important to be before block compilation (dir. depend on stmt-compilation order)*)
+       (env'', table_decls) <- compile_action_tables env' vars tbl_map;
        b <- lookup_block_body n b_func_map;
-       (env'', b') <- compile_stmt env' b;
+       (env''', b') <- compile_stmt env' b;
        cntrl_decl <<-
        <|      name   := strlit n
              ; inline := F
@@ -355,8 +447,7 @@ Definition compile_control_def:
              ; body   := b' 
              ; return := One
        |>;
-       (env''', decls) <- compile_block_functions env'' vars b_func_map;
-       return (env''', cntrl_decl::decls)
+       return (env''', decls::(table_decl::cntrl_decl))
      od
 End
 
@@ -424,18 +515,40 @@ Definition compile_archblocks_def:
   | arch_block_out => NONE
 End
 
+(*``func_map:((string, (stmt # (string # d) list)) alist)``*)
+Definition compile_global_funs_def:
+  compile_global_funs env [] = return (env, [])
+  compile_global_funs env (s, (stmt, sd_list))::func_map =
+  do
+    (env', body_pan) <- compile_stmt stmt env ;
+    prms <<- to_params sd_list;
+    decl <<-
+    <|         name        := get_fun_name s
+             ; inline      := F
+             ; export      := F
+             ; params      := prms
+             ; body        := body_pan
+             ; return      := One
+    |> :64 fun_decl;
+    (env'', decls) <- compile_global_funs env' func_map;
+    return (env'', decl::decls))
+  od
+End
+
         
 (* (ab_list # pblock_map # 'a ffblock_map # 'a input_f # 'a output_f # 'a copyin_pbl # 'a copyout_pbl # 'a apply_table_f # 'a ext_map # func_map) *)
 Definition compile_actx_def:
   compile_actx env (abs, (_, pblock_ms), _, _, _, _, _, apply_table, _, func_map) =
   do
-    (env', decls) <- compile_archblocks env pblock_ms abs func_map;
-    return (env', decls)
+    (env', global_decls) <- compile_global_funs func_map;
+    (env'', decls) <- compile_archblocks env' pblock_ms abs func_map;
+    return decls::global_decls
   od
 End
 
+
 (*-------------------------------------------------*)
-(*               PRE-PASS & SETUP                  *)
+(*                    SETUP                        *)
 (*-------------------------------------------------*)
 Definition env_setup_def:
   env_setup =
@@ -443,20 +556,25 @@ Definition env_setup_def:
     dict1 = FEMPTY : word64 state_dict;
     dict2 = FEMPTY : scope_dict;
     dict3 = FEMPTY : staten_dict;
+    dict4 = FEMPTY : word64 out_ind_dict;
     stack1 = [[]] : scope;
-    dict4 = FEMPTY : word64 out_pos_exp_dict;
-    env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 ; var_scope := stack1 ; out_exp := dict4 |>;
+    env = <| states := dict1 ; scopes := dict2 ; state_nums := dict3 ; var_scope := stack1 ; out_ind := dict4 |>;
    in
      return env)
 End
+
 (*-------------------------------------------------*)
 (*                    ENTRY                        *)
 (*-------------------------------------------------*)
+
+(*
+   Should also include aenv (i.e. input enviroment/state) as input paremeter.
+*)
 Definition compile_def:
-  compile_def =
+  compile_def actx =
   do
     let env = env_setup in
-    (_, pancake_program) <- compile_prog env;
+    pancake_program <- compile_prog env actx;
     case pancake_program of
       NONE => "Throw some error"
     | SOME => NONE (*some_pancake_function pancake_program*)
